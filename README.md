@@ -51,6 +51,29 @@
 - 日常改动通过 PR 合入 `main`，必须由另一名开发者审查并通过 CI；项目初始化提交可由负责人确认后直接推送。
 - 默认 Squash and merge；每个 PR 使用 `Closes #<issue>`。
 
+## 本地开发
+
+项目要求 Python 3.12。首次运行时安装应用及开发依赖：
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -e ".[dev]"
+```
+
+启动本地服务：
+
+```powershell
+.venv\Scripts\python -m uvicorn app.main:app --reload
+```
+
+提交前执行与项目门禁一致的检查：
+
+```powershell
+.venv\Scripts\ruff check .
+.venv\Scripts\ruff format --check .
+.venv\Scripts\pytest -q
+```
+
 首个开发任务从 [Backlog #1](docs/backlog.md#1-初始化-fastapi-模块化单体工程) 开始。实现前必须先阅读 `AGENTS.md` 和关联文档。
 
 ## 安全
