@@ -1,103 +1,68 @@
-# 采购白名单 Agent：最小协作规范
+# 两人协作规范
 
-> 目标：两人使用 Vibe Coding 时，仍能稳定开发、容易合并，并让 `main` 分支始终可以演示。
+> 目标：以小 Issue、短分支和明确契约让 `main` 始终可启动、可测试和可演示。
 
-## 1. 角色与代码边界
+## 1. 职责
 
-| 负责人 | 主责目录/模块 | 主要工作 |
+| 开发者 | 主责 | 模块 |
 | --- | --- | --- |
-| A：业务流程与数据 | `backend/app/infrastructure/`、`backend/app/workflow/`、`backend/app/catalog/`、`backend/app/contracts/` | 数据库、导入、需求单、审批、采购、交付、入库、权限、审计和状态机 |
-| B：Agent 与前端 | `backend/app/agent/`、`frontend/` | 对话、字段提取、追问、检索、推荐、Agent 测试，以及用于演示的薄前端 |
+| A | 工程底座、公共能力、身份权限、Agent、会话与需求基础 | `main/bootstrap/config`、`infrastructure`、`shared`、`agent`、`requirement`、审计基础 |
+| B | 主数据、名单、推荐和采购闭环 | `product`、`supplier`、`whitelist`、`blacklist`、`recommendation`、`approval`、`purchase`、`delivery`、`inspection`、`inbound` |
+| 共同 | 公共 Schema、枚举、数据库、迁移链、CI 和发布 | `docs`、`migrations`、公共契约和工程配置 |
 
-共同规则：
+每个 Issue 只有一名负责人，另一名开发者是审查者。跨模块开发先确定 `docs/api-contracts.md` 中的公开 Service/Schema，再分别实现；不得跨模块直连 Repository。
 
-- Agent 只能读取产品、供应商、白名单和黑名单数据；不得直接写数据库。
-- Agent 的固定输出为：`extracted_fields`、`missing_fields`、`recommendations`、`risks`、`evidence`、`requires_confirmation`。
-- `backend/app/contracts/` 中的接口字段和状态枚举由 A 维护；B 需要变更时，先在 Issue 或 PR 中说明。
-- 前端保持薄层：只显示、提交和确认；黑名单、审批、入库和状态变化均由后端校验。
-
-## 2. 分支与 Pull Request
-
-- `main`：稳定演示分支，禁止直接提交。
-- 每项任务从最新 `main` 新建一个短分支；一个分支只做一个小目标。
+## 2. 分支和 PR
 
 ```text
-feat/workflow-request       # A：需求流程
-feat/catalog-import         # A：产品/供应商导入
-feat/agent-recommendation   # B：推荐和风险解释
-feat/ui-approval            # B：审批页面
-fix/receipt-quantity        # 修复问题
+main                         唯一长期分支，日常通过 PR 合入
+feature/<issue>-<name>       功能
+fix/<issue>-<name>           缺陷
+docs/<issue>-<name>          文档
+chore/<issue>-<name>         工程配置
 ```
 
-- 完成一个小目标后：提交 → 推送 → 创建 Pull Request（PR）→ 请对方检查 → 合并。
-- A 是 `main` 的集成负责人：
-  - A 的业务 PR：B 快速检查，A 合并；
-  - B 的 Agent/UI PR：A 快速检查，A 合并。
-- 合并前必须写清楚：做了什么、怎么验证、影响的接口/页面、已知限制。
-- 不传压缩包、不复制粘贴文件、不让两个人在同一个分支上同时开发。
-
-## 3. 每天的固定节奏
-
-1. 开始前 10 分钟：同步昨天完成、今天目标、阻塞点、需要确认的字段或规则。
-2. 下午 15 分钟：用真实接口联调一次；发现问题创建 Issue，不在聊天记录里遗忘。
-3. 收工前：每个人推送当前分支；A 确保 `main` 至少保留一个可启动的演示版本。
-
-超过 15 分钟仍无法确认的业务规则、接口字段或代码冲突，立即语音/屏幕共享决定，不各自猜测。
-
-## 4. 最小开发流程
+标准流程：
 
 ```text
-同步 main → 新建分支 → 只改自己负责模块 → 本地验证 → 提交并推送 → PR → 对方检查 → 合并 main
+Issue Ready -> 同步 main -> 短分支 -> 分析/计划 -> 实现/测试
+-> 自检 diff -> PR 到 main -> 对方审查 -> CI -> Squash merge
 ```
 
-常用命令：
+- 一个分支只实现一个小目标；分支作者负责解决该分支冲突。
+- 冲突必须按双方业务意图和现行契约合并，不得机械选择 ours/theirs。
+- 公共枚举、Schema、核心状态机和同一数据库表避免并行修改。
+- PR 必须关联 Issue，列出数据库/API 变化、测试实况、风险和遗留事项。
+- `main` 发布由人工完成；Codex 不得 push、合并、删除分支或发布。
 
-```bash
-# 开始任务
-git switch main
-git pull origin main
-git switch -c feat/agent-recommendation
+## 3. Issue 最低信息
 
-# 完成任务
-git status
-git add backend/app/agent
-git commit -m "feat(agent): add whitelist recommendation"
-git push -u origin feat/agent-recommendation
+- 目标和业务背景；负责人、审查者和前置依赖；
+- 关联 FR/BR/AI/AC；
+- 允许和禁止修改范围；
+- 输入、输出、权限和数据范围；
+- 数据库/API/公共契约影响；
+- 可执行的验收标准和测试要求；
+- 明确不包含内容。
 
-# 合并前同步主分支；有冲突时由该分支作者解决
-git fetch origin
-git merge origin/main
-git push
-```
+不满足以上条件时不得开始编码。
 
-## 5. 冲突与 Vibe Coding 规则
+## 4. 日常节奏
 
-- 谁的分支产生冲突，谁负责解决；不要让 AI 在不了解业务的情况下自动选“保留左边/右边”。
-- 发生冲突后，先找出两边要实现的业务目标，再保留同时满足两边目标的代码；解决后重新启动并走一次对应流程。
-- 使用 Vibe Coding 时，每次提示词写明：允许修改的目录、禁止修改的目录、验收条件和不允许绕过的业务规则。
-- 每次提交前至少验证：服务能启动、改动涉及的接口可调用、没有把密钥或本地配置提交进去。
-- `.env` 只保留在本地；仓库只提交 `.env.example`。
+1. 开始前同步昨天结果、今日 Issue、公共文件和阻塞。
+2. 接口契约变化先更新文档并由对方确认。
+3. 每天至少一次在真实公开契约上联调；问题创建 Issue，不只留在聊天记录。
+4. 收工前推送个人分支（由开发者人工操作）并记录测试结果。
+5. 超过 15 分钟仍无法确认的业务规则、Schema 或冲突，立即共同决策并记录到 `docs/decisions.md`。
 
-## 6. 本周任务切分
+## 5. 合并门禁
 
-| 日期 | A：业务流程与数据 | B：Agent 与前端 |
-| --- | --- | --- |
-| Day 1 | FastAPI/MySQL 骨架、表结构、导入、状态枚举 | Agents SDK、字段提取、追问、模拟检索 |
-| Day 2 | 需求单、状态机、审批基础接口 | 黑白名单校验、候选检索、推荐说明 |
-| Day 3 | 审批、采购单、审计 | 停产/未知处理、推荐快照、需求/审批页面 |
-| Day 4 | 交付、到货、入库及数量校验 | Agent 联调、提示词防护、采购/入库页面 |
-| Day 5 | 权限、异常修复、回归 | Agent 评测、演示数据和演示脚本 |
+- 改动未超出 Issue；
+- 分层、权限、事务、状态、幂等和审计正确；
+- 迁移单 head 且可从空库升级；
+- 受影响测试、Ruff 和格式检查真实通过；
+- 文档和公共契约同步；
+- 没有密钥、真实采购数据或未授权附件；
+- 审查意见全部解决，遗留工作已经拆分。
 
-## 7. PR 模板
-
-复制以下内容到每个 PR：
-
-```markdown
-## 做了什么
-
-## 如何验证
-
-## 影响的接口或页面
-
-## 已知限制/待确认项
-```
+完整 Codex 工作协议和 DoR/DoD 见 [开发执行手册](codex-development-playbook.md)。
