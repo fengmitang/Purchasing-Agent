@@ -1,0 +1,3 @@
+Single-database asynchronous migration environment for MySQL 8.
+
+Do not edit revisions already merged to main. Every schema change must add a new revision.
