@@ -19,3 +19,10 @@ def test_health_returns_service_metadata_and_utc_time() -> None:
     response_time = datetime.fromisoformat(payload["time"].replace("Z", "+00:00"))
     assert response_time.tzinfo is not None
     assert response_time.utcoffset() == UTC.utcoffset(response_time)
+
+
+def test_health_preserves_valid_request_id_without_changing_body_contract() -> None:
+    response = client.get("/health", headers={"X-Request-ID": "health-check-1"})
+
+    assert response.headers["X-Request-ID"] == "health-check-1"
+    assert set(response.json()) == {"status", "service", "version", "time"}

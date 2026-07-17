@@ -7,7 +7,7 @@
 - API 前缀：`/api/v1`；健康检查为 `/health`。
 - JSON 字段使用 `snake_case`；时间为带时区 ISO 8601；数据库统一 UTC。
 - 金额和精确数量通过 JSON 字符串传输，服务端使用 `Decimal`，禁止浮点数。
-- 所有写接口接受 `Idempotency-Key`；外部请求携带/生成 `X-Request-ID`。
+- 所有写接口接受 `Idempotency-Key`；请求可携带 `X-Request-ID`，服务端校验后沿用或生成新值，并在同名响应头、响应体和日志中返回。
 - 列表默认分页，禁止无上限返回；稳定排序必须包含唯一键作为次排序。
 - M1/M2 使用内部身份适配器生成 `CurrentUser`；未来 SSO 只替换适配器，不改变 Service 契约。关键接口在身份源不可用时拒绝匿名执行。
 
@@ -36,6 +36,8 @@
 ```
 
 错误码稳定且不暴露堆栈、SQL、密钥或内部连接信息。基础错误：`VALIDATION_ERROR`、`UNAUTHENTICATED`、`FORBIDDEN`、`RESOURCE_NOT_FOUND`、`STATE_CONFLICT`、`IDEMPOTENCY_CONFLICT`、`VERSION_CONFLICT`、`RATE_LIMITED`、`INTERNAL_ERROR`。
+
+参数验证错误返回 422 `VALIDATION_ERROR`；未处理异常返回 500 `INTERNAL_ERROR` 和固定安全说明。错误响应不得回显被拒绝的原始输入。`X-Request-ID` 只接受 1–128 位字母、数字、点、下划线、冒号或连字符，缺失或不合法时由服务端重新生成。
 
 分页响应：
 
@@ -106,6 +108,7 @@ class PageRequest(BaseModel):
 - `version` 为当前应用版本；
 - `time` 为带时区的 UTC ISO 8601 时间；
 - 该接口只表示应用进程存活，不访问数据库或其他外部系统。
+- 该接口的响应体不套用通用信封，但仍在 `X-Request-ID` 响应头中返回请求 ID。
 
 ## 4. M2 HTTP 接口
 

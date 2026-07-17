@@ -1,0 +1,47 @@
+"""Stable public error codes and domain exceptions."""
+
+from collections.abc import Sequence
+from enum import StrEnum
+from typing import Any
+
+
+class ErrorCode(StrEnum):
+    """Error identifiers that form part of the public API contract."""
+
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+    FORBIDDEN = "FORBIDDEN"
+    RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
+    STATE_CONFLICT = "STATE_CONFLICT"
+    IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    VERSION_CONFLICT = "VERSION_CONFLICT"
+    RATE_LIMITED = "RATE_LIMITED"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+HTTP_STATUS_BY_ERROR_CODE: dict[ErrorCode, int] = {
+    ErrorCode.VALIDATION_ERROR: 422,
+    ErrorCode.UNAUTHENTICATED: 401,
+    ErrorCode.FORBIDDEN: 403,
+    ErrorCode.RESOURCE_NOT_FOUND: 404,
+    ErrorCode.STATE_CONFLICT: 409,
+    ErrorCode.IDEMPOTENCY_CONFLICT: 409,
+    ErrorCode.VERSION_CONFLICT: 409,
+    ErrorCode.RATE_LIMITED: 429,
+    ErrorCode.INTERNAL_ERROR: 500,
+}
+
+
+class DomainError(Exception):
+    """A safe, expected business failure mapped to a stable API error."""
+
+    def __init__(
+        self,
+        code: ErrorCode,
+        message: str,
+        details: Sequence[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = list(details or ())

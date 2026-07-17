@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.config import Settings
+from app.config import RuntimeSettings, Settings
 
 
 def test_settings_require_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,3 +46,43 @@ def test_settings_accept_asyncmy_database_url() -> None:
 
     assert settings.sqlalchemy_database_url == database_url
     assert "password" not in repr(settings.database_url)
+
+
+def test_settings_load_environment_and_normalize_log_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "mysql+asyncmy://user:password@localhost/app")
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("LOG_LEVEL", "warning")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.environment == "staging"
+    assert settings.log_level == "WARNING"
+
+
+def test_explicit_settings_take_priority_over_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "mysql+asyncmy://env:password@localhost/app")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    settings = Settings(
+        database_url="mysql+asyncmy://explicit:password@localhost/app",
+        environment="test",
+        _env_file=None,
+    )
+
+    assert settings.environment == "test"
+    assert "explicit" in settings.sqlalchemy_database_url
+
+
+def test_runtime_settings_do_not_require_database_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("LOG_LEVEL", "error")
+
+    settings = RuntimeSettings(_env_file=None)
+
+    assert settings.log_level == "ERROR"
