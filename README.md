@@ -2,7 +2,7 @@
 
 面向数据中心采购业务的模块化单体系统。系统以自然语言为入口，覆盖需求收集、名单与历史检索、可解释推荐、楼长审批、采购执行、交付、验收、入库和全过程审计。
 
-当前仓库处于**文档基线完成、M1 工程底座待开发**状态。尚未实现的启动命令和 API 不应被视为可用功能。
+当前仓库已完成 M1 的 FastAPI、异步数据库、Alembic、统一日志与 API 异常底座，并通过 GitHub Actions 持续验证工程质量。业务模块及标记为 `Planned` 的 API 尚未实现。
 
 ## 核心原则
 
@@ -69,12 +69,34 @@ py -3.12 -m venv .venv
 提交前执行与项目门禁一致的检查：
 
 ```powershell
-.venv\Scripts\ruff check .
-.venv\Scripts\ruff format --check .
-.venv\Scripts\pytest -q
+.venv\Scripts\python -m ruff check .
+.venv\Scripts\python -m ruff format --check .
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m alembic heads
 ```
 
-首个开发任务从 [Backlog #1](docs/backlog.md#1-初始化-fastapi-模块化单体工程) 开始。实现前必须先阅读 `AGENTS.md` 和关联文档。
+未配置 `TEST_DATABASE_URL` 时，Pytest 会跳过需要一次性 MySQL 8 测试库的集成测试。使用可销毁的空测试库执行完整测试：
+
+```powershell
+$env:TEST_DATABASE_URL = "mysql+asyncmy://test_user:test_password@127.0.0.1:3306/purchasing_agent_test?charset=utf8mb4"
+.venv\Scripts\python -m pytest -q
+Remove-Item Env:\TEST_DATABASE_URL
+```
+
+不得将 `TEST_DATABASE_URL` 指向开发共享库、预生产库或生产库；集成测试会执行迁移降级并创建、删除探针表。
+
+## CI 门禁
+
+GitHub Actions 在提交到 `main`、面向 `main` 的 Pull Request 及手动触发时执行以下同组命令：
+
+```bash
+python -m ruff check .
+python -m ruff format --check .
+python -m pytest -q
+python -m alembic heads
+```
+
+CI 使用隔离的 MySQL 8.0 Service 运行全部数据库集成测试，任一命令失败都会阻断。实现新任务前必须阅读 `AGENTS.md`、当前 Issue 和关联文档。
 
 ## 安全
 
