@@ -84,9 +84,28 @@ class PageRequest(BaseModel):
 
 | 状态 | 方法与路径 | 用途 | 验收 |
 | --- | --- | --- | --- |
-| Planned | `GET /health` | 进程存活，不依赖外部系统 | 返回 200 和版本/时间 |
+| Implemented | `GET /health` | 进程存活，不依赖外部系统 | 返回 200、服务状态、服务名、版本和 UTC 时间 |
 | Planned | `GET /api/v1/health/ready` | 检查数据库和迁移就绪 | 依赖失败返回 503，不泄密 |
 | Planned | `GET /api/v1/me` | 返回当前用户、角色和数据范围 | 未认证 401 |
+
+### 3.1 `GET /health`
+
+健康检查直接返回以下响应，不套用通用 `data`/`meta` 包装：
+
+```json
+{
+  "status": "ok",
+  "service": "purchasing-agent",
+  "version": "0.1.0",
+  "time": "2026-07-17T01:21:38.779939Z"
+}
+```
+
+- `status` 固定为 `ok`；
+- `service` 为服务名；
+- `version` 为当前应用版本；
+- `time` 为带时区的 UTC ISO 8601 时间；
+- 该接口只表示应用进程存活，不访问数据库或其他外部系统。
 
 ## 4. M2 HTTP 接口
 
