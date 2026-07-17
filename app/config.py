@@ -1,13 +1,15 @@
 """Environment-backed application configuration."""
 
+from typing import Literal
+
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 
-class Settings(BaseSettings):
-    """Validated settings loaded from environment variables or a local .env file."""
+class RuntimeSettings(BaseSettings):
+    """Process settings that are safe to load before integrations initialize."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -15,6 +17,19 @@ class Settings(BaseSettings):
         extra="ignore",
         hide_input_in_errors=True,
     )
+
+    environment: Literal["local", "test", "staging", "production"] = "local"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def normalize_log_level(cls, value: object) -> object:
+        """Accept conventional case-insensitive log-level names."""
+        return value.upper() if isinstance(value, str) else value
+
+
+class Settings(RuntimeSettings):
+    """Validated integration settings loaded from environment or a local .env file."""
 
     database_url: SecretStr
 
