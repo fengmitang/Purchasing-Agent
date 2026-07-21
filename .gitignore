@@ -17,6 +17,7 @@ htmlcov/
 build/
 dist/
 node_modules/
+.vite/
 *.egg-info/
 .idea/
 .vscode/
