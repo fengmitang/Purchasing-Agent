@@ -2,6 +2,9 @@
 
 > 本文记录公开契约。状态为 `Planned` 的接口用于约束开发顺序，不代表已经实现。
 
+Agent 创建采购草稿、历史供应商推荐和员工确认提交的详细协作契约见
+[`agent-backend-interface-agreement.md`](agent-backend-interface-agreement.md)。若概述与详细契约存在歧义，开发前必须由双方共同确认并同步修正文档。
+
 ## 1. 通用约定
 
 - API 前缀：`/api/v1`；健康检查为 `/health`。
