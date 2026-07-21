@@ -34,7 +34,7 @@
 
     purchasing-agent
 
-共包含 13 张核心业务表：
+共包含 14 张核心业务表：
 
   编号   表名                   作用
   ------ ---------------------- ----------------
@@ -51,6 +51,7 @@
   11     employee               员工及流程参与人
   12     purchase_approval      采购申请审批记录
   13     purchase_status_history 采购申请和采购单状态历史
+  14     idempotency_record       写操作幂等请求及首次响应快照
 
 ------------------------------------------------------------------------
 
@@ -549,21 +550,21 @@ Agent抽取：
 | revision_no | INT | 是 | 版本号，默认 1 |
 | previous_requirement_id | BIGINT UNSIGNED | 否 | 上一版本申请外键 |
 | category_id | BIGINT UNSIGNED | 否 | 产品分类外键 |
-| category_name | VARCHAR(100) | 否 | 申请时分类名称快照 |
+| category_name | VARCHAR(100) | 否 | 申请时分类名称快照；新申请只能选择八个规定类别之一 |
 | application_reason | TEXT | 否 | 采购原因 |
 | application_location | VARCHAR(200) | 否 | 申请地点 |
 | device_type | VARCHAR(100) | 否 | 设备类型 |
 | product_id | BIGINT UNSIGNED | 否 | 白名单产品外键 |
-| product_name | VARCHAR(200) | 是 | 设备名称 |
+| product_name | VARCHAR(200) | 否 | 设备名称；草稿可空，提交审批前必填 |
 | product_full_name | VARCHAR(500) | 否 | 具体设备全称 |
 | brand | VARCHAR(100) | 否 | 品牌 |
 | model | VARCHAR(200) | 否 | 设备型号 |
 | specification | TEXT | 否 | 规格参数 |
-| quantity | DECIMAL(18,4) | 否 | 可计算的采购数量 |
+| quantity | DECIMAL(18,4) | 否 | 可计算的采购数量；新申请只允许大于 0 的整数，保留小数位兼容历史导入 |
 | quantity_raw | VARCHAR(100) | 否 | 无法直接数值化的原始数量 |
 | unit | VARCHAR(20) | 否 | 单位 |
 | supplier_id | BIGINT UNSIGNED | 否 | 供应商外键 |
-| supplier_name | VARCHAR(200) | 否 | 申请时供应商名称快照 |
+| supplier_name | VARCHAR(200) | 否 | 申请时供应商名称快照；草稿可空，提交审批前必填 |
 | unit_price | DECIMAL(18,2) | 否 | 单价 |
 | unit_price_raw | VARCHAR(100) | 否 | 无法直接数值化的原始价格 |
 | total_amount | DECIMAL(18,2) | 否 | 总价 |
@@ -664,3 +665,23 @@ Agent抽取：
 - 金额使用 `DECIMAL`，时间按 UTC 保存；
 - 状态变化、审批和采购完成必须在 Service 的同一事务中写入主表及历史表；
 - 所有写操作必须校验角色、楼宇数据范围、当前状态、并发版本和幂等键。
+
+## 7.7 idempotency_record 写操作幂等记录表
+
+### 作用
+
+保存写接口第一次成功执行时的请求摘要和响应快照。相同员工、相同操作和相同幂等键再次提交相同内容时返回首次结果；同一幂等键对应不同内容时拒绝执行，避免 Agent 重试产生重复草稿或重复修改。
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| id | BIGINT UNSIGNED | 是 | 幂等记录 ID |
+| actor_code | VARCHAR(50) | 是 | 发起操作的员工工号 |
+| operation | VARCHAR(100) | 是 | 业务操作名称，修改操作包含申请 ID |
+| idempotency_key | VARCHAR(128) | 是 | 客户端生成的幂等键 |
+| request_hash | VARCHAR(64) | 是 | 规范化请求内容的 SHA-256 摘要 |
+| resource_type | VARCHAR(50) | 是 | 业务对象类型 |
+| resource_id | BIGINT UNSIGNED | 否 | 首次操作产生或修改的业务对象 ID |
+| response_payload | JSON | 是 | 首次成功响应的结构化快照 |
+| created_at | DATETIME(6) | 是 | 首次成功执行时间 |
+
+唯一约束为 `actor_code + operation + idempotency_key`。本表只保存受控业务响应，不得写入令牌、数据库连接信息或未脱敏的模型输入输出。

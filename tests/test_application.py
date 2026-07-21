@@ -12,7 +12,7 @@ def test_application_factory_returns_independent_instances() -> None:
 
 
 def test_main_exposes_importable_application() -> None:
-    assert app.title == "purchasing-agent"
+    assert app.title == "数据中心采购 Agent 后端接口"
     assert app.version == "0.1.0"
 
 
