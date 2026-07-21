@@ -30,6 +30,7 @@
 | [系统架构](docs/architecture.md) | 模块边界、调用方向、数据流和阶段出口 |
 | [数据库设计](docs/database-design-2.md) | 核心实体、字段约束、索引和迁移规范 |
 | [API 契约](docs/api-contracts.md) | 公共类型、错误、分页和 Planned 接口 |
+| [Agent 与采购后端接口约定](docs/agent-backend-interface-agreement.md) | 双方职责、采购草稿、历史供应商推荐和员工确认提交 |
 | [MVP 决策](docs/decisions.md) | SRS 待确认项采用的可开发默认值 |
 | [开发执行手册](docs/codex-development-playbook.md) | 两人 + Codex 的 Issue/PR 工作协议 |
 | [M1/M2 Backlog](docs/backlog.md) | 首批 12 个可执行开发任务 |
