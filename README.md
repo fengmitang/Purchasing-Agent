@@ -2,7 +2,7 @@
 
 面向数据中心采购业务的模块化单体系统。系统以自然语言为入口，覆盖需求收集、名单与历史检索、可解释推荐、楼长审批、采购执行、交付、验收、入库和全过程审计。
 
-当前仓库已完成 M1 的 FastAPI、异步数据库、Alembic、统一日志与 API 异常底座，并通过 GitHub Actions 持续验证工程质量。业务模块及标记为 `Planned` 的 API 尚未实现。
+当前仓库已完成 M1 工程底座，并已实现采购申请草稿、员工确认提交、历史供应商推荐和对应的员工网页。其他标记为 `Planned` 的业务接口仍按开发路线逐步实现。
 
 ## 核心原则
 
@@ -18,7 +18,7 @@
 - SQLAlchemy 2 异步模式、asyncmy、Alembic、MySQL 8.0
 - HTTPX、Tenacity、APScheduler + MySQL 任务表
 - Pytest、pytest-asyncio、Ruff、GitHub Actions
-- React + TypeScript + Ant Design（管理端后置）
+- React + TypeScript + Ant Design + Vite
 - Docker Compose + Nginx
 
 ## 文档导航
@@ -66,6 +66,28 @@ py -3.12 -m venv .venv
 ```powershell
 .venv\Scripts\python -m uvicorn app.main:app --reload
 ```
+
+另开一个 PowerShell 窗口启动员工网页：
+
+```powershell
+cd frontend
+pnpm install
+pnpm run dev
+```
+
+浏览器访问 `http://127.0.0.1:5173`。开发服务器会把 `/api` 请求转发到
+`http://127.0.0.1:8000`，因此需要先启动上面的 FastAPI 后端。网页当前支持手动填写采购申请、
+保存或修改草稿、查询历史供应商、提交审批、取消草稿和查看本人申请。开发环境暂时通过页面右上角的
+员工工号模拟登录身份，正式落地时应替换为统一登录。
+
+生成可部署的前端静态文件：
+
+```powershell
+cd frontend
+pnpm run build
+```
+
+构建产物位于 `frontend/dist`，生产环境可由 Nginx 托管并将 `/api` 反向代理到 FastAPI。
 
 提交前执行与项目门禁一致的检查：
 

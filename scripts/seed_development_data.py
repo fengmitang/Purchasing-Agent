@@ -653,9 +653,9 @@ async def seed_database() -> dict[str, int]:
                     "Refusing to seed a database other than the local purchasing_agent database"
                 )
             revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-            if revision != "0003_procurement_workflow":
+            if revision != "0004_requirement_draft_api":
                 raise RuntimeError(
-                    "Database must be upgraded to 0003_procurement_workflow before seeding"
+                    "Database must be upgraded to 0004_requirement_draft_api before seeding"
                 )
             existing_seed_rows = await session.scalar(
                 text(

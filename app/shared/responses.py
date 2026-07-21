@@ -21,6 +21,22 @@ class SuccessResponse[DataT](BaseModel):
     meta: ResponseMeta
 
 
+class PageInfo(BaseModel):
+    """Stable page metadata for bounded list responses."""
+
+    number: int
+    size: int
+    total: int
+
+
+class PaginatedResponse[DataT](BaseModel):
+    """Standard successful list response."""
+
+    data: list[DataT]
+    page: PageInfo
+    meta: ResponseMeta
+
+
 class ErrorBody(BaseModel):
     """Safe public error information."""
 

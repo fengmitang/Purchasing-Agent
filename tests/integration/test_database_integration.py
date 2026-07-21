@@ -25,6 +25,7 @@ DEMO_TABLES = {
     "agent_message",
     "agent_session",
     "employee",
+    "idempotency_record",
     "operation_log",
     "product_category",
     "product_supplier",
@@ -157,6 +158,15 @@ async def get_workflow_schema(database_url: str) -> dict[str, object]:
                         column["name"]
                         for column in inspect(sync_connection).get_columns("purchase_requirement")
                     },
+                    "requirement_product_name_nullable": next(
+                        column["nullable"]
+                        for column in inspect(sync_connection).get_columns("purchase_requirement")
+                        if column["name"] == "product_name"
+                    ),
+                    "idempotency_columns": {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns("idempotency_record")
+                    },
                     "approval_columns": {
                         column["name"]
                         for column in inspect(sync_connection).get_columns("purchase_approval")
@@ -201,7 +211,7 @@ def test_empty_database_migration_has_one_head(monkeypatch: pytest.MonkeyPatch) 
     alembic_config = Config("alembic.ini")
     script = ScriptDirectory.from_config(alembic_config)
 
-    assert script.get_heads() == ["0003_procurement_workflow"]
+    assert script.get_heads() == ["0004_requirement_draft_api"]
 
     command.upgrade(alembic_config, "head")
     assert asyncio.run(get_table_names(database_url)) == DEMO_TABLES | {"alembic_version"}
@@ -231,6 +241,17 @@ def test_empty_database_migration_has_one_head(monkeypatch: pytest.MonkeyPatch) 
         "source_reference",
         "version",
     } <= workflow_schema["requirement_columns"]
+    assert workflow_schema["requirement_product_name_nullable"] is True
+    assert {
+        "actor_code",
+        "operation",
+        "idempotency_key",
+        "request_hash",
+        "resource_type",
+        "resource_id",
+        "response_payload",
+        "created_at",
+    } <= workflow_schema["idempotency_columns"]
     assert {
         "requirement_id",
         "approver_id",
