@@ -34,7 +34,7 @@
 
     purchasing-agent
 
-共包含 10 张核心业务表：
+共包含 13 张核心业务表：
 
   编号   表名                   作用
   ------ ---------------------- ----------------
@@ -48,6 +48,9 @@
   8      recommendation         Agent推荐结果
   9      purchase_order         采购订单
   10     operation_log          操作日志
+  11     employee               员工及流程参与人
+  12     purchase_approval      采购申请审批记录
+  13     purchase_status_history 采购申请和采购单状态历史
 
 ------------------------------------------------------------------------
 
@@ -472,3 +475,192 @@ Agent抽取：
 目标：
 
 增强 Demo 展示效果。
+
+------------------------------------------------------------------------
+
+# 7. 员工申请、楼长审批与采购完成流程扩展
+
+本节是 `0003_procurement_workflow` 迁移对应的正式设计。M1 阶段采用
+“一张采购申请对应一种设备”，与历史 Excel 一行一条采购记录保持一致。申请人、
+楼长（专业工程师）和采购人员统一使用员工主数据，不建立独立申请人表。
+
+流程如下：
+
+    员工提交采购申请
+          |
+          v
+    楼长/专业工程师审批
+          |
+          +-- 驳回/退回 -> 员工修改并形成新版本后重新提交
+          |
+          +-- 通过 -> 生成采购单并交给采购人员
+                              |
+                              v
+                    询价核价 -> 签合同 -> 验收入库
+                              |
+                              v
+                    入库完成，采购单完成
+
+询价核价、签合同和验收入库的详细业务过程不在当前系统展开，只记录状态和关键
+时间；入库时间必须重点记录。审批、采购和状态变化采用追加记录或版本方式，禁止
+静默覆盖历史事实。
+
+## 7.1 employee 员工表
+
+### 作用
+
+统一保存申请员工、审批人和采购人员。员工工号是正式业务唯一标识；历史导入数据
+缺少工号时允许为空，后续人工补充。姓名不能作为全局唯一键。
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| id | BIGINT UNSIGNED | 是 | 员工 ID |
+| employee_no | VARCHAR(50) | 否 | 工号，非空时唯一 |
+| name | VARCHAR(100) | 是 | 姓名 |
+| phone | VARCHAR(50) | 否 | 联系方式 |
+| role | VARCHAR(50) | 否 | 员工、楼长/专业工程师、采购人员等角色 |
+| status | VARCHAR(20) | 是 | 默认 `ACTIVE` |
+| created_at | DATETIME(6) | 是 | 创建时间（UTC） |
+| updated_at | DATETIME(6) | 是 | 更新时间（UTC） |
+| version | INT | 是 | 乐观锁版本，默认 1 |
+
+索引与约束：`employee_no` 唯一；姓名、电话建立普通索引。
+
+## 7.2 purchase_requirement 采购申请单
+
+### 作用
+
+在原采购需求表基础上承载正式采购申请。表中同时保存员工外键和申请时的工号、
+姓名、联系方式快照，确保员工主数据变更后历史申请仍可还原。被驳回或退回的申请
+修改重提时形成新版本，通过 `previous_requirement_id` 串联，不覆盖原申请。
+
+### 主要字段
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| requirement_no | VARCHAR(100) | 是 | 申请单号，唯一 |
+| session_id | VARCHAR(100) | 否 | 来源 Agent 会话；历史导入可空 |
+| employee_id | BIGINT UNSIGNED | 否 | 申请员工外键 |
+| applicant_employee_no | VARCHAR(50) | 否 | 申请人工号快照 |
+| applicant_name | VARCHAR(100) | 否 | 申请人姓名快照 |
+| applicant_phone | VARCHAR(50) | 否 | 申请人联系方式快照 |
+| requested_at | DATETIME(6) | 否 | 员工首次提出申请的时间 |
+| submitted_at | DATETIME(6) | 否 | 当前版本提交审批时间 |
+| revision_no | INT | 是 | 版本号，默认 1 |
+| previous_requirement_id | BIGINT UNSIGNED | 否 | 上一版本申请外键 |
+| category_id | BIGINT UNSIGNED | 否 | 产品分类外键 |
+| category_name | VARCHAR(100) | 否 | 申请时分类名称快照 |
+| application_reason | TEXT | 否 | 采购原因 |
+| application_location | VARCHAR(200) | 否 | 申请地点 |
+| device_type | VARCHAR(100) | 否 | 设备类型 |
+| product_id | BIGINT UNSIGNED | 否 | 白名单产品外键 |
+| product_name | VARCHAR(200) | 是 | 设备名称 |
+| product_full_name | VARCHAR(500) | 否 | 具体设备全称 |
+| brand | VARCHAR(100) | 否 | 品牌 |
+| model | VARCHAR(200) | 否 | 设备型号 |
+| specification | TEXT | 否 | 规格参数 |
+| quantity | DECIMAL(18,4) | 否 | 可计算的采购数量 |
+| quantity_raw | VARCHAR(100) | 否 | 无法直接数值化的原始数量 |
+| unit | VARCHAR(20) | 否 | 单位 |
+| supplier_id | BIGINT UNSIGNED | 否 | 供应商外键 |
+| supplier_name | VARCHAR(200) | 否 | 申请时供应商名称快照 |
+| unit_price | DECIMAL(18,2) | 否 | 单价 |
+| unit_price_raw | VARCHAR(100) | 否 | 无法直接数值化的原始价格 |
+| total_amount | DECIMAL(18,2) | 否 | 总价 |
+| currency | VARCHAR(3) | 是 | 币种，默认 `CNY` |
+| status | VARCHAR(30) | 否 | 当前申请状态 |
+| source_reference | VARCHAR(255) | 否 | 导入来源唯一引用，防止重复导入 |
+| created_at / updated_at | DATETIME | 是 | 创建和更新时间 |
+| version | INT | 是 | 乐观锁版本，默认 1 |
+
+历史 Excel 中分类、会话、数量、时间或联系方式缺失时允许保存为空，禁止使用占位
+值编造业务数据。`product_whitelist.category_id` 同步调整为可空。
+
+申请状态建议使用：`DRAFT`、`PENDING_APPROVAL`、`REJECTED`、`APPROVED`、
+`PURCHASING`、`QUOTED`、`CONTRACTED`、`RECEIVED`、`COMPLETED`、
+`CANCELLED`。状态是否合法由 Service 状态机校验，数据库使用字符串保存以便后续扩展。
+
+## 7.3 purchase_approval 采购审批记录表
+
+### 作用
+
+每一次提交、重新提交和审批动作都形成独立记录。审批人必须关联员工表，同时保存
+审批当时的工号、姓名和联系方式快照。楼长端通过 `requirement_id` 读取完整申请单。
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| id | BIGINT UNSIGNED | 是 | 审批记录 ID |
+| requirement_id | BIGINT UNSIGNED | 是 | 采购申请外键 |
+| revision_no | INT | 是 | 被审批的申请版本 |
+| approver_id | BIGINT UNSIGNED | 是 | 审批人员工外键 |
+| approver_employee_no | VARCHAR(50) | 否 | 审批人工号快照 |
+| approver_name | VARCHAR(100) | 是 | 审批人姓名快照 |
+| approver_phone | VARCHAR(50) | 否 | 审批人联系方式快照 |
+| action | VARCHAR(30) | 是 | `APPROVED`、`REJECTED`、`RETURNED`、`TRANSFERRED` |
+| comment | TEXT | 否 | 审批评价或拒绝/退回原因 |
+| submitted_at | DATETIME(6) | 是 | 送审时间 |
+| acted_at | DATETIME(6) | 是 | 审批动作时间 |
+| idempotency_key | VARCHAR(128) | 否 | 防止重复审批，非空时唯一 |
+| created_at | DATETIME(6) | 是 | 记录创建时间 |
+
+审批结果写入本表后，在同一事务中更新采购申请当前状态并追加状态历史。员工端通过
+申请状态及最新审批记录获得反馈。禁止申请人审批自己的申请，该规则由 Service 校验。
+
+## 7.4 purchase_order 采购单扩展
+
+审批通过后生成采购单并交给采购人员。原有产品、供应商、数量和金额字段继续保留，
+新增采购人员快照和关键节点时间。
+
+| 新增字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| supplier_name | VARCHAR(200) | 否 | 选定供应商名称快照 |
+| unit_price | DECIMAL(18,2) | 否 | 实际采购单价 |
+| purchaser_id | BIGINT UNSIGNED | 否 | 采购人员工外键 |
+| purchaser_employee_no | VARCHAR(50) | 否 | 采购人员工号快照 |
+| purchaser_name | VARCHAR(100) | 否 | 采购人员姓名快照 |
+| purchaser_phone | VARCHAR(50) | 否 | 采购人员联系方式快照 |
+| purchasing_started_at | DATETIME(6) | 否 | 开始采购时间 |
+| quoted_at | DATETIME(6) | 否 | 询价核价完成时间 |
+| contracted_at | DATETIME(6) | 否 | 合同签订时间 |
+| received_at | DATETIME(6) | 否 | 验收入库时间，重点记录 |
+| completed_at | DATETIME(6) | 否 | 采购完成时间 |
+| updated_at | DATETIME(6) | 是 | 更新时间 |
+| version | INT | 是 | 乐观锁版本，默认 1 |
+
+入库完成时必须在同一事务中写入 `received_at` 和 `completed_at`，将采购单状态更新为
+`COMPLETED`，并追加状态历史。询价核价和合同不建立独立业务表。
+
+## 7.5 purchase_status_history 状态历史表
+
+### 作用
+
+以追加方式记录采购申请和采购单的每一次状态变化，用于流程展示、员工反馈和审计。
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| id | BIGINT UNSIGNED | 是 | 状态记录 ID |
+| requirement_id | BIGINT UNSIGNED | 条件必填 | 采购申请外键 |
+| order_id | BIGINT UNSIGNED | 条件必填 | 采购单外键 |
+| from_status | VARCHAR(30) | 否 | 变化前状态；首次状态可空 |
+| to_status | VARCHAR(30) | 是 | 变化后状态 |
+| operator_id | BIGINT UNSIGNED | 否 | 操作员工外键 |
+| operator_employee_no | VARCHAR(50) | 否 | 操作人工号快照 |
+| operator_name | VARCHAR(100) | 否 | 操作人姓名快照 |
+| operator_phone | VARCHAR(50) | 否 | 操作人联系方式快照 |
+| remark | TEXT | 否 | 状态变化说明 |
+| changed_at | DATETIME(6) | 是 | 状态变化时间 |
+| request_id | VARCHAR(128) | 否 | 请求追踪 ID |
+| created_at | DATETIME(6) | 是 | 记录创建时间 |
+
+`requirement_id` 与 `order_id` 至少一个非空。状态历史只追加、不修改、不物理删除。
+
+## 7.6 关键关联与数据一致性
+
+- 一个员工可以发起多张采购申请，也可以作为审批人或采购人员参与多张单据；
+- 一张采购申请可以有多条审批记录和多条状态历史；
+- 修改重提通过新申请版本和 `previous_requirement_id` 保留完整历史；
+- 审批通过后才允许生成采购单；一个需求只允许一个活动采购任务；
+- 申请人、审批人、采购人员均保存“员工外键 + 当时信息快照”；
+- 金额使用 `DECIMAL`，时间按 UTC 保存；
+- 状态变化、审批和采购完成必须在 Service 的同一事务中写入主表及历史表；
+- 所有写操作必须校验角色、楼宇数据范围、当前状态、并发版本和幂等键。
