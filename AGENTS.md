@@ -36,7 +36,6 @@ IntegrationClient <- BusinessService
 - Router 只处理协议、参数和响应，不直接访问 ORM、Repository 或提交事务。
 - Service 负责权限、数据范围、业务规则、状态机、事务、幂等和审计编排。
 - Repository 只负责数据访问，不承载业务授权和状态决策。
-- Agent Handler 只能调用受控 Business Service，不得直接访问数据库。
 - LLM 只负责理解、抽取和自然语言解释；不得决定硬过滤、评分、审批或正式状态变化。
 - 正式业务事实必须保存到 MySQL；会话上下文和 JSON 草稿不能成为唯一事实来源。
 
@@ -50,8 +49,6 @@ IntegrationClient <- BusinessService
 - 写操作必须在 Service 内定义事务边界；重复请求使用业务唯一键或幂等键返回原结果。
 
 ## 5. Agent 和 LLM
-
-- 首期不使用 LangGraph、AutoGen、CrewAI 等 Agent 编排框架，只使用显式 Scene/Stage、状态机和 HandlerRegistry。
 - 结构化模型输出必须经过目标 Pydantic Schema 的 `model_validate`。
 - Prompt 必须要求未知事实返回 `null`、歧义写入 `ambiguities`、不得编造。
 - 模型调用设置超时、有限重试、脱敏日志和调用记录；失败时提供表单或规则化降级。
