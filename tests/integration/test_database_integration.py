@@ -21,6 +21,22 @@ from app.infrastructure.database import (
 
 pytestmark = pytest.mark.integration
 
+DEMO_TABLES = {
+    "agent_message",
+    "agent_session",
+    "employee",
+    "operation_log",
+    "product_category",
+    "product_supplier",
+    "product_whitelist",
+    "purchase_approval",
+    "purchase_order",
+    "purchase_requirement",
+    "purchase_status_history",
+    "recommendation",
+    "supplier",
+}
+
 
 def require_test_database_url() -> str:
     database_url = os.getenv("TEST_DATABASE_URL")
@@ -63,7 +79,10 @@ async def test_database_probe_succeeds(engine: AsyncEngine) -> None:
 async def test_sessions_use_distinct_connections(engine: AsyncEngine) -> None:
     session_factory = create_session_factory(engine)
 
-    async with session_scope(session_factory) as first, session_scope(session_factory) as second:
+    async with (
+        session_scope(session_factory) as first,
+        session_scope(session_factory) as second,
+    ):
         first_id, second_id = await asyncio.gather(
             first.scalar(text("SELECT CONNECTION_ID()")),
             second.scalar(text("SELECT CONNECTION_ID()")),
@@ -123,16 +142,142 @@ async def get_table_names(database_url: str) -> set[str]:
     return set(table_names)
 
 
+async def get_workflow_schema(database_url: str) -> dict[str, object]:
+    settings = Settings(database_url=database_url, _env_file=None)
+    engine = create_database_engine(settings)
+    try:
+        async with engine.connect() as connection:
+            return await connection.run_sync(
+                lambda sync_connection: {
+                    "employee_columns": {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns("employee")
+                    },
+                    "requirement_columns": {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns("purchase_requirement")
+                    },
+                    "approval_columns": {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns("purchase_approval")
+                    },
+                    "order_columns": {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns("purchase_order")
+                    },
+                    "history_columns": {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns(
+                            "purchase_status_history"
+                        )
+                    },
+                    "requirement_foreign_tables": {
+                        foreign_key["referred_table"]
+                        for foreign_key in inspect(sync_connection).get_foreign_keys(
+                            "purchase_requirement"
+                        )
+                    },
+                    "approval_foreign_tables": {
+                        foreign_key["referred_table"]
+                        for foreign_key in inspect(sync_connection).get_foreign_keys(
+                            "purchase_approval"
+                        )
+                    },
+                    "history_foreign_tables": {
+                        foreign_key["referred_table"]
+                        for foreign_key in inspect(sync_connection).get_foreign_keys(
+                            "purchase_status_history"
+                        )
+                    },
+                }
+            )
+    finally:
+        await engine.dispose()
+
+
 def test_empty_database_migration_has_one_head(monkeypatch: pytest.MonkeyPatch) -> None:
     database_url = require_test_database_url()
     monkeypatch.setenv("DATABASE_URL", database_url)
     alembic_config = Config("alembic.ini")
     script = ScriptDirectory.from_config(alembic_config)
 
-    assert script.get_heads() == ["0001_database_baseline"]
+    assert script.get_heads() == ["0003_procurement_workflow"]
 
     command.upgrade(alembic_config, "head")
-    assert asyncio.run(get_table_names(database_url)) == {"alembic_version"}
+    assert asyncio.run(get_table_names(database_url)) == DEMO_TABLES | {"alembic_version"}
+
+    workflow_schema = asyncio.run(get_workflow_schema(database_url))
+    assert {"employee_no", "name", "phone", "role", "status", "version"} <= (
+        workflow_schema["employee_columns"]
+    )
+    assert {
+        "requirement_no",
+        "employee_id",
+        "applicant_employee_no",
+        "applicant_name",
+        "applicant_phone",
+        "requested_at",
+        "submitted_at",
+        "revision_no",
+        "previous_requirement_id",
+        "application_reason",
+        "application_location",
+        "device_type",
+        "product_full_name",
+        "quantity_raw",
+        "unit_price",
+        "unit_price_raw",
+        "total_amount",
+        "source_reference",
+        "version",
+    } <= workflow_schema["requirement_columns"]
+    assert {
+        "requirement_id",
+        "approver_id",
+        "approver_employee_no",
+        "approver_name",
+        "approver_phone",
+        "action",
+        "comment",
+        "acted_at",
+    } <= workflow_schema["approval_columns"]
+    assert {
+        "purchaser_id",
+        "purchaser_employee_no",
+        "purchaser_name",
+        "purchaser_phone",
+        "quoted_at",
+        "contracted_at",
+        "received_at",
+        "completed_at",
+        "version",
+    } <= workflow_schema["order_columns"]
+    assert {
+        "requirement_id",
+        "order_id",
+        "from_status",
+        "to_status",
+        "operator_id",
+        "changed_at",
+    } <= workflow_schema["history_columns"]
+    assert {
+        "employee",
+        "product_category",
+        "product_whitelist",
+        "purchase_requirement",
+        "supplier",
+    } <= workflow_schema["requirement_foreign_tables"]
+    assert workflow_schema["approval_foreign_tables"] == {
+        "employee",
+        "purchase_requirement",
+    }
+    assert workflow_schema["history_foreign_tables"] == {
+        "employee",
+        "purchase_order",
+        "purchase_requirement",
+    }
 
     command.downgrade(alembic_config, "base")
+    assert asyncio.run(get_table_names(database_url)) == {"alembic_version"}
     command.upgrade(alembic_config, "head")
+    assert asyncio.run(get_table_names(database_url)) == DEMO_TABLES | {"alembic_version"}

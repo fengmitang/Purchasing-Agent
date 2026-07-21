@@ -28,7 +28,7 @@
 | [AGENTS.md](AGENTS.md) | Codex 和开发者必须遵守的强制规则 |
 | [需求基线](docs/requirements.md) | FR/BR/AI/AC、状态、MVP 范围和追踪矩阵 |
 | [系统架构](docs/architecture.md) | 模块边界、调用方向、数据流和阶段出口 |
-| [数据库设计](docs/database-design.md) | 核心实体、字段约束、索引和迁移规范 |
+| [数据库设计](docs/database-design-2.md) | 核心实体、字段约束、索引和迁移规范 |
 | [API 契约](docs/api-contracts.md) | 公共类型、错误、分页和 Planned 接口 |
 | [MVP 决策](docs/decisions.md) | SRS 待确认项采用的可开发默认值 |
 | [开发执行手册](docs/codex-development-playbook.md) | 两人 + Codex 的 Issue/PR 工作协议 |
@@ -84,6 +84,18 @@ Remove-Item Env:\TEST_DATABASE_URL
 ```
 
 不得将 `TEST_DATABASE_URL` 指向开发共享库、预生产库或生产库；集成测试会执行迁移降级并创建、删除探针表。
+
+### 开发测试数据
+
+先把本地开发数据库升级到最新结构，再预览并写入脱敏测试数据：
+
+```powershell
+.venv\Scripts\python -m alembic upgrade head
+.venv\Scripts\python -m scripts.seed_development_data --dry-run
+.venv\Scripts\python -m scripts.seed_development_data
+```
+
+生成器固定创建 500 张采购申请：240 张参考历史表格中的设备类别和业务模式，260 张为同类模拟记录。员工、联系方式、供应商、地点、型号、价格和流程时间均为虚拟测试数据。脚本不会删除已有业务数据；完整执行后再次运行会直接返回已有结果，检测到部分写入时会拒绝继续，避免重复数据。
 
 ## CI 门禁
 
