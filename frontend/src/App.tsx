@@ -1,25 +1,28 @@
 import { ApartmentOutlined, AuditOutlined, CheckCircleOutlined, FileAddOutlined, HistoryOutlined, InboxOutlined, LockOutlined, LogoutOutlined, RobotOutlined, SaveOutlined, SearchOutlined, ShoppingCartOutlined, UserOutlined } from "@ant-design/icons";
 import { Alert, App as AntApp, Button, Card, Col, Descriptions, Drawer, Empty, Flex, Form, Input, InputNumber, Layout, Menu, Progress, Row, Select, Space, Spin, Statistic, Steps, Table, Tag, Typography } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ApprovalPage } from "./ApprovalPage";
 import { api } from "./api";
-import type { CurrentUser, Recommendation, RequirementDetail, RequirementFormValues, RequirementStatus, RequirementSummary } from "./types";
+import { ProcurementPage } from "./ProcurementPage";
+import type { BuildingOption, CurrentUser, Recommendation, RequirementDetail, RequirementFormValues, RequirementStatus, RequirementSummary } from "./types";
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 const statusMap: Record<string, { text: string; color: string }> = {
   DRAFT: { text: "草稿", color: "gold" }, PENDING_APPROVAL: { text: "待审批", color: "blue" },
   APPROVED: { text: "审批通过", color: "cyan" }, REJECTED: { text: "审批退回", color: "red" },
-  PURCHASING: { text: "采购中", color: "purple" }, STOCKED_IN: { text: "已入库", color: "green" },
+  PURCHASING: { text: "采购中", color: "purple" }, QUOTED: { text: "已询价核价", color: "geekblue" },
+  CONTRACTED: { text: "已签合同", color: "magenta" }, STOCKED_IN: { text: "已入库", color: "green" },
   COMPLETED: { text: "已完成", color: "green" }, CANCELLED: { text: "已取消", color: "default" },
 };
 const fieldNames: Record<string, string> = {
-  category_name: "申请类别", application_reason: "申请原因", application_location: "申请地点",
+  building_id: "所属楼宇", category_name: "申请类别", application_reason: "申请原因", application_location: "申请地点",
   device_type: "设备类型", product_name: "设备名称", product_full_name: "具体设备全称",
   brand: "品牌", model: "设备型号", specification: "规格参数", quantity: "数量",
   unit: "单位", supplier_name: "供应商", unit_price: "单价",
 };
 const submissionRequiredFields: Array<keyof RequirementFormValues> = [
-  "category_name", "application_reason", "application_location", "device_type",
+  "building_id", "category_name", "application_reason", "application_location", "device_type",
   "product_name", "product_full_name", "brand", "model", "specification", "quantity", "unit",
   "supplier_name", "unit_price", "currency",
 ];
@@ -37,7 +40,7 @@ function dateTime(value: string | null) {
 }
 function detailToForm(detail: RequirementDetail): RequirementFormValues {
   return {
-    category_name: detail.category_name ?? undefined, application_reason: detail.application_reason ?? undefined,
+    building_id: detail.building_id ?? undefined, category_name: detail.category_name ?? undefined, application_reason: detail.application_reason ?? undefined,
     application_location: detail.application_location ?? undefined, device_type: detail.device_type ?? undefined,
     product_name: detail.product_name ?? undefined, product_full_name: detail.product_full_name ?? undefined,
     brand: detail.brand ?? undefined, model: detail.model ?? undefined, specification: detail.specification ?? undefined,
@@ -59,6 +62,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
   const [listLoading, setListLoading] = useState(false);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [recommendationOpen, setRecommendationOpen] = useState(false);
+  const [buildings, setBuildings] = useState<BuildingOption[]>([]);
   const values = Form.useWatch([], form);
   const total = useMemo(() => Number(values?.quantity || 0) * Number(values?.unit_price || 0), [values?.quantity, values?.unit_price]);
 
@@ -69,6 +73,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
     } catch (error) { message.error((error as Error).message); } finally { setListLoading(false); }
   }, [employeeCode, message]);
   useEffect(() => { void refreshList(); }, [refreshList]);
+  useEffect(() => { api.listBuildings().then(setBuildings).catch(error => message.error((error as Error).message)); }, [message]);
 
   async function saveDraft() {
     const formValues = form.getFieldsValue();
@@ -135,6 +140,15 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
       async onOk() { if (!reason.trim()) { message.warning("请填写取消原因"); throw new Error("missing reason"); } try { setCurrent(await api.cancel(employeeCode.trim(), current, reason.trim())); await refreshList(); message.success("草稿已取消"); } catch (error) { if ((error as Error).message !== "missing reason") message.error((error as Error).message); throw error; } },
     });
   }
+  async function reviseRejected() {
+    if (!current || current.status !== "REJECTED") return;
+    setLoading(true);
+    try {
+      const revised = await api.revise(employeeCode, current);
+      setCurrent(revised); form.setFieldsValue(detailToForm(revised)); await refreshList();
+      message.success("已保留原审批记录并创建修改草稿，请修改后重新提交");
+    } catch (error) { message.error((error as Error).message); } finally { setLoading(false); }
+  }
 
   const editable = !current || current.status === "DRAFT";
   const completion = current ? Math.max(0, Math.round(((Object.keys(fieldNames).length - current.missing_fields.length) / Object.keys(fieldNames).length) * 100)) : 0;
@@ -148,8 +162,8 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
   const menuItems = [
     { key: "new", icon: <FileAddOutlined />, label: "新建采购申请" },
     { key: "mine", icon: <InboxOutlined />, label: "我的采购申请" },
-    ...(user.roles.includes("BUILDING_MANAGER") ? [{ key: "approvals", icon: <AuditOutlined />, label: "待我审批（下一阶段）", disabled: true }] : []),
-    ...(user.roles.includes("PURCHASER") ? [{ key: "procurement", icon: <ShoppingCartOutlined />, label: "采购任务（下一阶段）", disabled: true }] : []),
+    ...(user.roles.includes("BUILDING_MANAGER") ? [{ key: "approvals", icon: <AuditOutlined />, label: "待我审批" }] : []),
+    ...(user.roles.includes("PURCHASER") ? [{ key: "procurement", icon: <ShoppingCartOutlined />, label: "采购任务" }] : []),
   ];
 
   return <Layout className="app-shell">
@@ -161,20 +175,21 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
     <Layout>
       <Header className="topbar"><div><Text type="secondary">当前员工</Text><strong>{user.name}（{employeeCode}）</strong><Space size={4}>{user.roles.map(role => <Tag key={role}>{role === "EMPLOYEE" ? "员工" : role === "BUILDING_MANAGER" ? "楼长" : role === "PURCHASER" ? "采购员" : "管理员"}</Tag>)}</Space></div><Button icon={<LogoutOutlined />} onClick={() => void onLogout()}>退出登录</Button></Header>
       <Content className="main-content">
-        {activeMenu === "mine" ? <section>
+        {activeMenu === "approvals" ? <ApprovalPage /> : activeMenu === "procurement" ? <ProcurementPage /> : activeMenu === "mine" ? <section>
           <div className="page-heading"><div><Title level={2}>我的采购申请</Title><Text type="secondary">查看草稿与已提交申请的当前进度</Text></div><Button type="primary" icon={<FileAddOutlined />} onClick={startNew}>新建申请</Button></div>
           <Card className="surface-card" bordered={false}><Table rowKey="requirement_id" loading={listLoading} columns={columns} dataSource={list} pagination={{ total: listTotal, pageSize: 20, hideOnSinglePage: true }} scroll={{ x: 760 }} /></Card>
         </section> : <Spin spinning={loading}><section>
           <div className="page-heading form-heading"><div><Space align="center"><Title level={2}>{current ? "编辑采购申请" : "新建采购申请"}</Title>{current && statusTag(current.status)}</Space><br/><Text type="secondary">{current ? `${current.requirement_no} · 版本 ${current.version}` : "填写采购需求，可随时保存为草稿"}</Text></div>
-            <Space wrap>{current?.status === "DRAFT" && <Button danger onClick={cancelDraft}>取消草稿</Button>}<Button icon={<HistoryOutlined />} disabled={!current} onClick={() => void findRecommendations()}>查历史供应商</Button><Button icon={<SaveOutlined />} disabled={!editable} onClick={() => void saveDraft()}>{current ? "保存修改" : "保存草稿"}</Button><Button type="primary" icon={<CheckCircleOutlined />} disabled={!current || current.status !== "DRAFT"} onClick={submit}>提交审批</Button></Space>
+            <Space wrap>{current?.status === "DRAFT" && <Button danger onClick={cancelDraft}>取消草稿</Button>}{current?.status === "REJECTED" && <Button type="primary" onClick={() => void reviseRejected()}>修改后重新提交</Button>}<Button icon={<HistoryOutlined />} disabled={!current} onClick={() => void findRecommendations()}>查历史供应商</Button><Button icon={<SaveOutlined />} disabled={!editable} onClick={() => void saveDraft()}>{current ? "保存修改" : "保存草稿"}</Button><Button type="primary" icon={<CheckCircleOutlined />} disabled={!current || current.status !== "DRAFT"} onClick={submit}>提交审批</Button></Space>
           </div>
           {current && <Card className="overview-card" bordered={false}><Row gutter={[24,18]} align="middle"><Col xs={24} lg={8}><Space direction="vertical" size={2}><Text type="secondary">申请人信息（系统自动带入）</Text><Text strong>{current.applicant.name} · {current.applicant.employee_no || employeeCode}</Text><Text>{current.applicant.phone || "联系电话未登记"}</Text></Space></Col><Col xs={24} sm={8} lg={5}><Statistic title="预计总价" value={money(current.total_amount, current.currency)} /></Col><Col xs={24} sm={8} lg={5}><Statistic title="申请时间" value={dateTime(current.requested_at)} /></Col><Col xs={24} sm={8} lg={6}><Text type="secondary">信息完整度</Text><Progress percent={completion} status={current.missing_fields.length ? "active" : "success"} /></Col></Row></Card>}
           {current?.missing_fields.length ? <Alert className="missing-alert" type="warning" showIcon message="草稿还不能提交审批" description={`请补充：${current.missing_fields.map((field) => fieldNames[field] || field).join("、")}，然后先保存修改。`} /> : current?.status === "DRAFT" ? <Alert className="missing-alert" type="success" showIcon message="信息已完整，可以核对后提交审批" /> : null}
           <Form form={form} layout="vertical" initialValues={{ currency: "CNY", unit: "台" }} disabled={!editable} onValuesChange={(changed) => form.setFields((Object.keys(changed) as Array<keyof RequirementFormValues>).map(name => ({ name, errors: [] })))}>
             <Card className="surface-card form-section" bordered={false} title={<><span className="step-number">1</span>申请信息</>}><Row gutter={20}>
-              <Col xs={24} md={8}><Form.Item name="category_name" label="申请类别" required><Select placeholder="请选择申请类别" options={["电气","暖通","弱电","机房环境","工器具","算力服务器","IDC网络","其他"].map(value => ({ value, label: value }))} /></Form.Item></Col>
-              <Col xs={24} md={8}><Form.Item name="application_location" label="申请地点" required><Input placeholder="例如：A区数据中心3楼" /></Form.Item></Col>
-              <Col xs={24} md={8}><Form.Item name="device_type" label="设备类型" required><Input placeholder="例如：服务器、交换机、UPS" /></Form.Item></Col>
+              <Col xs={24} md={6}><Form.Item name="building_id" label="所属楼宇" required><Select placeholder="请选择审批楼宇" options={buildings.map(item => ({ value: item.building_id, label: item.building_name }))} /></Form.Item></Col>
+              <Col xs={24} md={6}><Form.Item name="category_name" label="申请类别" required><Select placeholder="请选择申请类别" options={["电气","暖通","弱电","机房环境","工器具","算力服务器","IDC网络","其他"].map(value => ({ value, label: value }))} /></Form.Item></Col>
+              <Col xs={24} md={6}><Form.Item name="application_location" label="具体申请地点" required><Input placeholder="例如：3楼 A03 机房" /></Form.Item></Col>
+              <Col xs={24} md={6}><Form.Item name="device_type" label="设备类型" required><Input placeholder="例如：服务器、交换机、UPS" /></Form.Item></Col>
               <Col span={24}><Form.Item name="application_reason" label="申请原因" required><Input.TextArea rows={3} maxLength={5000} showCount placeholder="请说明采购用途、业务背景及必要性" /></Form.Item></Col>
             </Row></Card>
             <Card className="surface-card form-section" bordered={false} title={<><span className="step-number">2</span>设备信息</>}><Row gutter={20}>

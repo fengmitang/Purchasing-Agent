@@ -30,6 +30,7 @@ from app.modules.requirement.schemas import (
     RequirementNotice,
     RequirementSubmissionResult,
     RequirementSummary,
+    ReviseRejectedRequirement,
     SubmitRequirement,
     UpdateRequirementDraft,
 )
@@ -38,6 +39,7 @@ from app.shared.identity import AuditContext, CurrentUser
 
 _EDITABLE_FIELDS = {
     "session_id",
+    "building_id",
     "category_id",
     "category_name",
     "application_reason",
@@ -58,6 +60,7 @@ _EDITABLE_FIELDS = {
 }
 _BUSINESS_FIELDS = _EDITABLE_FIELDS - {"session_id", "currency"}
 _REQUIRED_FOR_SUBMISSION = (
+    "building_id",
     "category_name",
     "application_reason",
     "application_location",
@@ -513,6 +516,100 @@ class RequirementService:
             await repository.flush()
             return detail
 
+    async def revise_rejected(
+        self,
+        requirement_id: int,
+        command: ReviseRejectedRequirement,
+        context: AuditContext,
+    ) -> RequirementDetail:
+        """保留被驳回申请，复制业务快照形成下一版本草稿。"""
+        payload = command.model_dump(mode="json")
+        request_hash = _request_hash(payload)
+        operation = f"revise_rejected_requirement:{requirement_id}"
+        now_aware = self._clock()
+        now = _utc_naive(now_aware)
+        async with transaction_scope(self._session_factory) as session:
+            repository = RequirementRepository(session)
+            replay = await self._idempotent_replay(
+                repository,
+                actor_code=context.actor.user_code,
+                operation=operation,
+                idempotency_key=context.idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return replay
+            employee = await self._require_employee(repository, context.actor)
+            previous = await repository.get_requirement_for_update(requirement_id)
+            self._require_owned(previous, employee)
+            if previous.status != "REJECTED":
+                raise DomainError(ErrorCode.STATE_CONFLICT, "只有被驳回的申请可以创建修改版本")
+            if previous.version != command.version:
+                raise DomainError(ErrorCode.VERSION_CONFLICT, "申请已更新，请刷新后重试")
+            revised = PurchaseRequirement(
+                requirement_no=self._number_factory(now_aware),
+                employee_id=employee.id,
+                applicant_employee_no=employee.employee_no,
+                applicant_name=employee.name,
+                applicant_phone=employee.phone,
+                requested_at=now,
+                submitted_at=None,
+                revision_no=previous.revision_no + 1,
+                previous_requirement_id=previous.id,
+                status="DRAFT",
+                quantity_raw=previous.quantity_raw,
+                unit_price_raw=previous.unit_price_raw,
+                source_reference=None,
+                updated_at=now,
+                version=1,
+                total_amount=previous.total_amount,
+                session_id=None,
+                building_id=previous.building_id,
+                category_id=previous.category_id,
+                category_name=previous.category_name,
+                application_reason=previous.application_reason,
+                application_location=previous.application_location,
+                device_type=previous.device_type,
+                product_id=previous.product_id,
+                product_name=previous.product_name,
+                product_full_name=previous.product_full_name,
+                brand=previous.brand,
+                model=previous.model,
+                specification=previous.specification,
+                quantity=previous.quantity,
+                unit=previous.unit,
+                supplier_id=previous.supplier_id,
+                supplier_name=previous.supplier_name,
+                unit_price=previous.unit_price,
+                currency=previous.currency,
+            )
+            repository.add_requirement(revised)
+            await repository.flush()
+            repository.add_status_history(
+                self._status_history(
+                    requirement=revised,
+                    employee=employee,
+                    from_status="REJECTED",
+                    to_status="DRAFT",
+                    context=context,
+                    remark=f"基于被驳回申请 {previous.requirement_no} 创建修改版本",
+                    changed_at=now,
+                )
+            )
+            detail = self._to_detail(revised, employee)
+            repository.add_idempotency_record(
+                self._idempotency_record(
+                    context=context,
+                    operation=operation,
+                    request_hash=request_hash,
+                    resource_id=revised.id,
+                    response=detail,
+                    created_at=now,
+                )
+            )
+            await repository.flush()
+            return detail
+
     @staticmethod
     def _require_draft_version(
         requirement: PurchaseRequirement,
@@ -689,6 +786,11 @@ class RequirementService:
         requirement: PurchaseRequirement,
         supplied_fields: set[str],
     ) -> None:
+        if requirement.building_id is not None:
+            building = await repository.get_building(requirement.building_id)
+            if building is None:
+                self._association_not_found("building_id")
+
         if requirement.category_id is not None:
             category = await repository.get_category(requirement.category_id)
             if category is None:
@@ -804,6 +906,7 @@ class RequirementService:
                 phone=requirement.applicant_phone or employee.phone,
             ),
             session_id=requirement.session_id,
+            building_id=requirement.building_id,
             category_id=requirement.category_id,
             category_name=requirement.category_name,
             application_reason=requirement.application_reason,

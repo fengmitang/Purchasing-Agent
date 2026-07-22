@@ -47,5 +47,6 @@ button, input, textarea { font: inherit; }
 .table-link { padding-left: 0; font-weight: 600; }
 .recommendation-card { margin-bottom: 14px; border-color: #dce9eb; }
 .recommendation-card h4 { display: inline-block; margin: 9px 0 14px !important; }
+.decision-reason { margin: 18px 0; background: #f8fbfc; }
 @media (max-width: 991px) { .main-content { padding: 24px 20px 48px; } .topbar { padding: 0 20px; } .sidebar-note { display: none; } }
 @media (max-width: 640px) { .main-content { padding: 20px 14px 42px; } .topbar { padding: 0 12px; } .topbar > div:first-child { display: none; } .topbar .ant-input-affix-wrapper { width: 150px; } .page-heading { align-items: flex-start; flex-direction: column; } .form-heading > .ant-space { width: 100%; } .page-heading h2 { font-size: 24px; } }

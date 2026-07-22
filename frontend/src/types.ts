@@ -7,7 +7,7 @@ export interface CurrentUser {
 
 export interface Applicant { employee_no: string | null; name: string; phone: string | null; }
 export interface RequirementFormValues {
-  category_name?: string; application_reason?: string; application_location?: string;
+  building_id?: number; category_name?: string; application_reason?: string; application_location?: string;
   device_type?: string; product_name?: string; product_full_name?: string;
   brand?: string; model?: string; specification?: string; quantity?: number;
   unit?: string; supplier_name?: string; unit_price?: number; currency?: string;
@@ -15,6 +15,7 @@ export interface RequirementFormValues {
 export interface RequirementDetail {
   requirement_id: number; requirement_no: string; status: RequirementStatus; version: number;
   applicant: Applicant; session_id: string | null; category_id: number | null;
+  building_id: number | null;
   category_name: string | null; application_reason: string | null;
   application_location: string | null; device_type: string | null; product_id: number | null;
   product_name: string | null; product_full_name: string | null; brand: string | null;
@@ -45,4 +46,32 @@ export interface Recommendation {
 export interface RecommendationResult {
   query_summary: string; result_code: "OK" | "NO_HISTORY_MATCH";
   recommendations: Recommendation[];
+}
+
+export interface BuildingOption { building_id: number; building_code: string; building_name: string; }
+export interface ApprovalTask {
+  requirement_id: number; requirement_no: string; status: string; version: number; revision_no: number;
+  building_id: number; building_name: string; applicant: { employee_id: number | null; employee_no: string | null; name: string; phone: string | null };
+  category_name: string | null; application_reason: string | null; application_location: string | null;
+  device_type: string | null; product_name: string | null; product_full_name: string | null;
+  brand: string | null; model: string | null; specification: string | null; quantity: string | null;
+  unit: string | null; supplier_name: string | null; unit_price: string | null; total_amount: string | null;
+  currency: string; submitted_at: string | null; updated_at: string;
+  approval_action: string | null; approval_comment: string | null;
+  approver_employee_no: string | null; approver_name: string | null; approver_phone: string | null;
+  acted_at: string | null;
+}
+export interface ProcurementTask {
+  requirement_id: number; requirement_no: string; status: string; requirement_version: number;
+  building_id: number | null; building_name: string | null; applicant_name: string;
+  applicant_employee_no: string | null; applicant_phone: string | null;
+  approver_employee_no: string | null; approver_name: string | null; approver_phone: string | null;
+  approval_comment: string | null; approved_at: string | null;
+  product_name: string | null; product_full_name: string | null; brand: string | null; model: string | null;
+  specification: string | null; quantity: string | null; unit: string | null; supplier_name: string | null;
+  unit_price: string | null; total_amount: string | null; currency: string; order_id: number | null;
+  order_no: string | null; order_version: number | null; purchaser_employee_no: string | null;
+  purchaser_name: string | null; purchaser_phone: string | null; purchasing_started_at: string | null;
+  quoted_at: string | null; contracted_at: string | null; received_at: string | null;
+  completed_at: string | null; updated_at: string;
 }

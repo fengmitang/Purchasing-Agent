@@ -127,6 +127,24 @@ class PageRequest(BaseModel):
 
 ## 4. M2 HTTP 接口
 
+### 4.0 审批与采购执行
+
+| 状态 | 方法与路径 | 说明 |
+| --- | --- | --- |
+| Implemented | `GET /api/v1/buildings` | 查询员工申请时可选择的有效楼宇 |
+| Implemented | `GET /api/v1/approvals/tasks` | 楼长查询职责楼宇内的待审批申请 |
+| Implemented | `GET /api/v1/approvals/tasks/{requirement_id}` | 楼长查看完整审批详情 |
+| Implemented | `POST /api/v1/approvals/tasks/{requirement_id}/decision` | 楼长通过或驳回申请，禁止自审 |
+| Implemented | `POST /api/v1/purchase-requirements/{requirement_id}/revise` | 员工基于被驳回申请创建修改草稿 |
+| Implemented | `GET /api/v1/procurement/tasks` | 采购员查看审批通过及采购中的任务 |
+| Implemented | `POST /api/v1/procurement/requirements/{requirement_id}/start` | 领取任务并开始采购 |
+| Implemented | `POST /api/v1/procurement/orders/{order_id}/advance` | 记录询价核价或合同签订状态 |
+| Implemented | `POST /api/v1/procurement/orders/{order_id}/complete` | 记录验收入库时间并完成采购 |
+
+楼长任务由 `PENDING_APPROVAL + building_id + 当前楼长有效楼宇职责` 实时计算。审批通过后申请状态
+变为 `APPROVED` 并进入采购员队列；采购完成必须同时记录 `received_at`、`completed_at`、采购人员
+工号、姓名和联系方式快照。所有状态写入均校验角色、数据范围、状态、版本和幂等键。
+
 ### 4.1 产品与供应商
 
 | 状态 | 方法与路径 | 说明 |

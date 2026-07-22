@@ -13,6 +13,7 @@ from app.modules.requirement.schemas import (
     RequirementDetail,
     RequirementSubmissionResult,
     RequirementSummary,
+    ReviseRejectedRequirement,
     SubmitRequirement,
     UpdateRequirementDraft,
 )
@@ -196,6 +197,32 @@ async def cancel_requirement_draft(
     service: Annotated[RequirementService, Depends(get_requirement_service)],
 ) -> SuccessResponse[RequirementDetail]:
     detail = await service.cancel_draft(
+        requirement_id,
+        payload,
+        _audit_context(request, actor, idempotency_key),
+    )
+    return SuccessResponse(
+        data=detail,
+        meta=ResponseMeta(request_id=request.state.request_id),
+    )
+
+
+@router.post(
+    "/{requirement_id}/revise",
+    response_model=SuccessResponse[RequirementDetail],
+    status_code=status.HTTP_201_CREATED,
+    summary="基于被驳回申请创建修改草稿",
+    description="保留原申请和审批记录，复制业务内容形成下一版本草稿，员工修改完整后可重新提交审批。",
+)
+async def revise_rejected_requirement(
+    requirement_id: int,
+    payload: ReviseRejectedRequirement,
+    request: Request,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+    actor: Annotated[CurrentUser, Depends(get_current_user)],
+    service: Annotated[RequirementService, Depends(get_requirement_service)],
+) -> SuccessResponse[RequirementDetail]:
+    detail = await service.revise_rejected(
         requirement_id,
         payload,
         _audit_context(request, actor, idempotency_key),
