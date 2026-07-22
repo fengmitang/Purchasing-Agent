@@ -163,7 +163,6 @@ async def seed_auth() -> dict[str, int]:
                     {"employee_id": employee["id"], "building_id": building_id, "now": now},
                 )
                 counts["scopes"] += max(result.rowcount, 0)
-
             for index, building_id in enumerate(buildings):
                 result = await session.execute(
                     text(

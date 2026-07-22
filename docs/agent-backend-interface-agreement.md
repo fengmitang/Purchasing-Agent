@@ -569,3 +569,16 @@ Agent 只能依赖 `error.code` 和结构化详情做程序判断，不得解析
 - 删除字段、修改字段含义、改变必填性、修改金额格式或状态语义属于不兼容变更，必须先更新本文并由双方确认。
 - 不兼容变更原则上发布 `/api/v2`，不得让 Agent 与后端在未同步的情况下分别修改。
 - 以仓库中已合入 `main` 的本文件版本为联调依据；聊天记录只用于讨论，不作为最终契约。
+
+## 12. 聊天入口与 Agent 运行边界
+
+- Router 只负责身份、Header、请求/响应 Schema 和分页参数，调用 `AgentChatService`。
+- `AgentChatService` 负责编排会话锁、幂等、历史、意图、Agent 调用和结果保存。
+- `GENERAL_QUERY` 不注册任何工具；采购意图只暴露既有受控采购工具。
+- `AgentContext` 接收 Router 已验证的 `CurrentUser`，不得解析或持久化原始 Authorization。
+- Anthropic 与 OpenAI 兼容客户端统一实现 `AgentModelProtocol`；Provider 只由服务端配置选择。
+- Redis 保存最近 100 条短期消息，TTL 默认 7 天；模型最多回放最近 12 条成功消息。
+- 同一会话串行、不同会话并行；失败的模型回复不进入后续上下文。
+- 用户消息先记录为 `PROCESSING`，成功改为 `COMPLETED`，失败改为 `FAILED`。
+- 生产环境 Redis 不可用时返回 `AGENT_UNAVAILABLE`；仅测试或显式本地模式允许内存实现。
+- 会话重置只清除 Redis，不得删除、撤销或修改任何 MySQL 采购事实。
