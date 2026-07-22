@@ -75,10 +75,10 @@ pnpm install
 pnpm run dev
 ```
 
-浏览器访问 `http://127.0.0.1:5173`。开发服务器会把 `/api` 请求转发到
-`http://127.0.0.1:8000`，因此需要先启动上面的 FastAPI 后端。网页当前支持手动填写采购申请、
-保存或修改草稿、查询历史供应商、提交审批、取消草稿和查看本人申请。开发环境暂时通过页面右上角的
-员工工号模拟登录身份，正式落地时应替换为统一登录。
+浏览器访问 `http://127.0.0.1:5174`。开发服务器会把 `/api` 请求转发到
+`http://127.0.0.1:8000`，因此需要先启动上面的 FastAPI 后端。网页当前支持员工使用工号或电话
+加密码登录、手动填写采购申请、保存或修改草稿、查询历史供应商、提交审批、取消草稿和查看本人申请。
+登录状态由后端服务端会话和安全 Cookie 保存，页面不在浏览器本地保存密码或登录令牌。
 
 生成可部署的前端静态文件：
 
@@ -116,9 +116,14 @@ Remove-Item Env:\TEST_DATABASE_URL
 .venv\Scripts\python -m alembic upgrade head
 .venv\Scripts\python -m scripts.seed_development_data --dry-run
 .venv\Scripts\python -m scripts.seed_development_data
+.venv\Scripts\python -m scripts.seed_auth_development
 ```
 
 生成器固定创建 500 张采购申请：240 张参考历史表格中的设备类别和业务模式，260 张为同类模拟记录。员工、联系方式、供应商、地点、型号、价格和流程时间均为虚拟测试数据。脚本不会删除已有业务数据；完整执行后再次运行会直接返回已有结果，检测到部分写入时会拒绝继续，避免重复数据。
+
+登录测试脚本只为 `DEV-` 开头的虚拟员工建立账号。可使用 `DEV-E0001`（普通员工）、
+`DEV-A0001`（楼长）或 `DEV-P0001`（采购员）登录，未设置 `DEV_SEED_PASSWORD` 时初始密码为
+`ChangeMe2026!`。该默认密码只允许用于本地测试，生产环境不得执行此脚本。
 
 ## CI 门禁
 

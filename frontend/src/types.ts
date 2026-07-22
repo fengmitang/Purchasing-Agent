@@ -1,5 +1,10 @@
 export type RequirementStatus = "DRAFT" | "PENDING_APPROVAL" | "CANCELLED" | string;
 
+export interface CurrentUser {
+  account_id: number; employee_id: number; employee_no: string; name: string;
+  phone: string | null; roles: string[]; building_ids: number[]; must_change_password: boolean;
+}
+
 export interface Applicant { employee_no: string | null; name: string; phone: string | null; }
 export interface RequirementFormValues {
   category_name?: string; application_reason?: string; application_location?: string;

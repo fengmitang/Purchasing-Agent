@@ -24,7 +24,10 @@ pytestmark = pytest.mark.integration
 DEMO_TABLES = {
     "agent_message",
     "agent_session",
+    "auth_session",
+    "building",
     "employee",
+    "employee_building_role",
     "idempotency_record",
     "operation_log",
     "product_category",
@@ -35,7 +38,11 @@ DEMO_TABLES = {
     "purchase_requirement",
     "purchase_status_history",
     "recommendation",
+    "role",
     "supplier",
+    "user_account",
+    "user_login_identifier",
+    "user_role",
 }
 
 
@@ -181,6 +188,14 @@ async def get_workflow_schema(database_url: str) -> dict[str, object]:
                             "purchase_status_history"
                         )
                     },
+                    "account_columns": {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns("user_account")
+                    },
+                    "session_columns": {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns("auth_session")
+                    },
                     "requirement_foreign_tables": {
                         foreign_key["referred_table"]
                         for foreign_key in inspect(sync_connection).get_foreign_keys(
@@ -211,7 +226,7 @@ def test_empty_database_migration_has_one_head(monkeypatch: pytest.MonkeyPatch) 
     alembic_config = Config("alembic.ini")
     script = ScriptDirectory.from_config(alembic_config)
 
-    assert script.get_heads() == ["0004_requirement_draft_api"]
+    assert script.get_heads() == ["0005_auth_rbac_foundation"]
 
     command.upgrade(alembic_config, "head")
     assert asyncio.run(get_table_names(database_url)) == DEMO_TABLES | {"alembic_version"}
@@ -281,6 +296,21 @@ def test_empty_database_migration_has_one_head(monkeypatch: pytest.MonkeyPatch) 
         "operator_id",
         "changed_at",
     } <= workflow_schema["history_columns"]
+    assert {
+        "employee_id",
+        "password_hash",
+        "must_change_password",
+        "failed_login_count",
+        "locked_until",
+        "last_login_at",
+    } <= workflow_schema["account_columns"]
+    assert {
+        "account_id",
+        "session_token_hash",
+        "expires_at",
+        "last_seen_at",
+        "revoked_at",
+    } <= workflow_schema["session_columns"]
     assert {
         "employee",
         "product_category",

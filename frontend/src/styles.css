@@ -3,6 +3,12 @@
 body { margin: 0; min-width: 320px; min-height: 100vh; }
 button, input, textarea { font: inherit; }
 .app-shell { min-height: 100vh; background: #f3f6f8; }
+.session-loading { min-height: 100vh; display: grid; place-items: center; background: #f3f6f8; }
+.login-page { min-height: 100vh; display: grid; place-items: center; padding: 28px 16px; background: radial-gradient(circle at 20% 10%, #d9f7f2 0, transparent 34%), linear-gradient(135deg, #eef5f7, #f8fafb); }
+.login-card { width: min(440px, 100%); padding: 12px 10px; border: 1px solid #dce8eb; box-shadow: 0 24px 70px rgba(18,59,82,.14); }
+.login-brand { display: flex; align-items: center; gap: 13px; margin-bottom: 34px; }
+.login-brand h2 { margin: 0 !important; color: #153c52; }
+.login-help { margin-top: 22px; }
 .sidebar { background: linear-gradient(180deg, #123b52 0%, #102f43 62%, #0e293b 100%) !important; position: sticky !important; top: 0; height: 100vh; }
 .brand { height: 82px; display: flex; align-items: center; gap: 12px; padding: 0 22px; color: white; }
 .brand-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; font-size: 20px; color: #123b52; background: #5eead4; box-shadow: 0 8px 24px rgba(94,234,212,.25); }

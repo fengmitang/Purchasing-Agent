@@ -9,6 +9,11 @@ class CurrentUser:
 
     user_code: str
     roles: frozenset[str] = frozenset({"EMPLOYEE"})
+    account_id: int | None = None
+    employee_id: int | None = None
+    name: str | None = None
+    phone: str | None = None
+    must_change_password: bool = False
     organization_id: int = 0
     building_ids: frozenset[int] = frozenset()
 
