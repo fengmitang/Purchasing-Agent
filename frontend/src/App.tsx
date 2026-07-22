@@ -1,8 +1,8 @@
-import { ApartmentOutlined, CheckCircleOutlined, FileAddOutlined, HistoryOutlined, InboxOutlined, RobotOutlined, SaveOutlined, SearchOutlined, UserOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, AuditOutlined, CheckCircleOutlined, FileAddOutlined, HistoryOutlined, InboxOutlined, LockOutlined, LogoutOutlined, RobotOutlined, SaveOutlined, SearchOutlined, ShoppingCartOutlined, UserOutlined } from "@ant-design/icons";
 import { Alert, App as AntApp, Button, Card, Col, Descriptions, Drawer, Empty, Flex, Form, Input, InputNumber, Layout, Menu, Progress, Row, Select, Space, Spin, Statistic, Steps, Table, Tag, Typography } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import type { Recommendation, RequirementDetail, RequirementFormValues, RequirementStatus, RequirementSummary } from "./types";
+import type { CurrentUser, Recommendation, RequirementDetail, RequirementFormValues, RequirementStatus, RequirementSummary } from "./types";
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -47,10 +47,10 @@ function detailToForm(detail: RequirementDetail): RequirementFormValues {
   };
 }
 
-function AppContent() {
+function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Promise<void> }) {
   const { message, modal } = AntApp.useApp();
   const [form] = Form.useForm<RequirementFormValues>();
-  const [employeeCode, setEmployeeCode] = useState(localStorage.getItem("employeeCode") || "DEV-E0001");
+  const employeeCode = user.employee_no;
   const [activeMenu, setActiveMenu] = useState("new");
   const [current, setCurrent] = useState<RequirementDetail | null>(null);
   const [list, setList] = useState<RequirementSummary[]>([]);
@@ -63,7 +63,6 @@ function AppContent() {
   const total = useMemo(() => Number(values?.quantity || 0) * Number(values?.unit_price || 0), [values?.quantity, values?.unit_price]);
 
   const refreshList = useCallback(async () => {
-    if (!employeeCode.trim()) return;
     setListLoading(true);
     try {
       const result = await api.listMine(employeeCode.trim()); setList(result.data); setListTotal(result.page.total);
@@ -71,14 +70,7 @@ function AppContent() {
   }, [employeeCode, message]);
   useEffect(() => { void refreshList(); }, [refreshList]);
 
-  function saveEmployeeCode() {
-    const code = employeeCode.trim();
-    if (!code) return void message.warning("请填写员工工号");
-    localStorage.setItem("employeeCode", code); setEmployeeCode(code); setCurrent(null); form.resetFields();
-    setRecommendations([]); void refreshList(); message.success("员工身份已切换");
-  }
   async function saveDraft() {
-    if (!employeeCode.trim()) return void message.warning("请先填写员工工号");
     const formValues = form.getFieldsValue();
     setLoading(true);
     try {
@@ -153,17 +145,21 @@ function AppContent() {
     { title: "金额", dataIndex: "total_amount", render: (value: string | null, row: RequirementSummary) => money(value, row.currency) },
     { title: "最后更新", dataIndex: "updated_at", render: dateTime },
   ];
+  const menuItems = [
+    { key: "new", icon: <FileAddOutlined />, label: "新建采购申请" },
+    { key: "mine", icon: <InboxOutlined />, label: "我的采购申请" },
+    ...(user.roles.includes("BUILDING_MANAGER") ? [{ key: "approvals", icon: <AuditOutlined />, label: "待我审批（下一阶段）", disabled: true }] : []),
+    ...(user.roles.includes("PURCHASER") ? [{ key: "procurement", icon: <ShoppingCartOutlined />, label: "采购任务（下一阶段）", disabled: true }] : []),
+  ];
 
   return <Layout className="app-shell">
     <Sider width={244} className="sidebar" breakpoint="lg" collapsedWidth="0">
       <div className="brand"><div className="brand-mark"><ApartmentOutlined /></div><div><strong>采购智管</strong><span>数据中心采购平台</span></div></div>
-      <Menu mode="inline" selectedKeys={[activeMenu]} onClick={({ key }) => { setActiveMenu(key); if (key === "new") startNew(); if (key === "mine") void refreshList(); }} items={[
-        { key: "new", icon: <FileAddOutlined />, label: "新建采购申请" }, { key: "mine", icon: <InboxOutlined />, label: "我的采购申请" },
-      ]} />
+      <Menu mode="inline" selectedKeys={[activeMenu]} onClick={({ key }) => { setActiveMenu(key); if (key === "new") startNew(); if (key === "mine") void refreshList(); }} items={menuItems} />
       <div className="sidebar-note"><RobotOutlined /><div><b>Agent 辅助</b><span>后续可通过对话自动填写同一张表单，提交前仍由你确认。</span></div></div>
     </Sider>
     <Layout>
-      <Header className="topbar"><div><Text type="secondary">当前员工</Text><strong>{employeeCode || "未设置"}</strong></div><Space.Compact><Input prefix={<UserOutlined />} value={employeeCode} onChange={(event) => setEmployeeCode(event.target.value)} placeholder="员工工号" /><Button onClick={saveEmployeeCode}>切换</Button></Space.Compact></Header>
+      <Header className="topbar"><div><Text type="secondary">当前员工</Text><strong>{user.name}（{employeeCode}）</strong><Space size={4}>{user.roles.map(role => <Tag key={role}>{role === "EMPLOYEE" ? "员工" : role === "BUILDING_MANAGER" ? "楼长" : role === "PURCHASER" ? "采购员" : "管理员"}</Tag>)}</Space></div><Button icon={<LogoutOutlined />} onClick={() => void onLogout()}>退出登录</Button></Header>
       <Content className="main-content">
         {activeMenu === "mine" ? <section>
           <div className="page-heading"><div><Title level={2}>我的采购申请</Title><Text type="secondary">查看草稿与已提交申请的当前进度</Text></div><Button type="primary" icon={<FileAddOutlined />} onClick={startNew}>新建申请</Button></div>
@@ -216,4 +212,34 @@ function AppContent() {
     </Drawer>
   </Layout>;
 }
-export default function App() { return <AntApp><AppContent /></AntApp>; }
+function LoginPage({ onLoggedIn }: { onLoggedIn: (user: CurrentUser) => void }) {
+  const { message } = AntApp.useApp();
+  const [loading, setLoading] = useState(false);
+  async function submit(values: { identifier: string; password: string }) {
+    setLoading(true);
+    try { onLoggedIn(await api.login(values.identifier, values.password)); }
+    catch (error) { message.error((error as Error).message); }
+    finally { setLoading(false); }
+  }
+  return <main className="login-page"><Card className="login-card" bordered={false}>
+    <div className="login-brand"><div className="brand-mark"><ApartmentOutlined /></div><div><Title level={2}>采购智管</Title><Text type="secondary">数据中心采购平台</Text></div></div>
+    <Title level={3}>员工登录</Title><Paragraph type="secondary">使用员工工号或已登记的联系电话登录</Paragraph>
+    <Form layout="vertical" size="large" onFinish={submit} requiredMark={false}>
+      <Form.Item name="identifier" label="工号或联系电话" rules={[{ required: true, message: "请输入工号或联系电话" }]}><Input prefix={<UserOutlined />} autoComplete="username" placeholder="请输入员工工号或联系电话" /></Form.Item>
+      <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}><Input.Password prefix={<LockOutlined />} autoComplete="current-password" placeholder="请输入登录密码" /></Form.Item>
+      <Button type="primary" htmlType="submit" loading={loading} block>登录</Button>
+    </Form>
+    <Alert className="login-help" type="info" showIcon message="忘记密码？" description="当前版本请联系系统管理员核验身份并重置密码。" />
+  </Card></main>;
+}
+
+function RootContent() {
+  const [user, setUser] = useState<CurrentUser | null>(null);
+  const [restoring, setRestoring] = useState(true);
+  useEffect(() => { api.me().then(setUser).catch(() => setUser(null)).finally(() => setRestoring(false)); }, []);
+  if (restoring) return <div className="session-loading"><Spin size="large" tip="正在恢复登录状态" /></div>;
+  if (!user) return <LoginPage onLoggedIn={setUser} />;
+  return <AppContent user={user} onLogout={async () => { await api.logout(); setUser(null); }} />;
+}
+
+export default function App() { return <AntApp><RootContent /></AntApp>; }

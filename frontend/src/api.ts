@@ -1,9 +1,10 @@
-import type { RecommendationResult, RequirementDetail, RequirementFormValues, RequirementSummary } from "./types";
+import type { CurrentUser, RecommendationResult, RequirementDetail, RequirementFormValues, RequirementSummary } from "./types";
 
 interface SuccessResponse<T> { data: T; meta: { request_id: string }; }
 interface PageResponse<T> extends SuccessResponse<T[]> { page: { number: number; size: number; total: number }; }
 
 const errorMessages: Record<string, string> = {
+  UNAUTHENTICATED: "登录已失效，请重新登录。",
   VALIDATION_ERROR: "填写内容不符合要求，请检查输入内容。",
   NOT_FOUND: "没有找到这张采购申请。",
   FORBIDDEN: "你没有权限操作这张采购申请。",
@@ -12,17 +13,22 @@ const errorMessages: Record<string, string> = {
   IDEMPOTENCY_CONFLICT: "本次操作标识已被用于其他请求，请重试。",
 };
 
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public code?: string) { super(message); }
+}
+
 function operationKey() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
-async function request<T>(path: string, employeeCode: string, options: RequestInit = {}, isWrite = false): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, isWrite = false): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, {
       ...options,
+      credentials: "include",
       headers: {
-        "Content-Type": "application/json", "X-User-Code": employeeCode,
+        "Content-Type": "application/json",
         ...(isWrite ? { "Idempotency-Key": operationKey() } : {}), ...options.headers,
       },
     });
@@ -32,7 +38,7 @@ async function request<T>(path: string, employeeCode: string, options: RequestIn
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const code = body?.error?.code as string | undefined;
-    throw new Error(errorMessages[code ?? ""] ?? body?.error?.message ?? "操作失败，请稍后重试。");
+    throw new ApiError(errorMessages[code ?? ""] ?? body?.error?.message ?? "操作失败，请稍后重试。", response.status, code);
   }
   return body as T;
 }
@@ -54,34 +60,57 @@ function draftPayload(values: RequirementFormValues) {
 }
 
 export const api = {
+  async login(identifier: string, password: string) {
+    return (await request<SuccessResponse<{ user: CurrentUser }>>("/api/v1/auth/login", {
+      method: "POST", body: JSON.stringify({ identifier, password }),
+    })).data.user;
+  },
+  async me() {
+    return (await request<SuccessResponse<CurrentUser>>("/api/v1/auth/me")).data;
+  },
+  async logout() {
+    await request<SuccessResponse<{ message: string }>>("/api/v1/auth/logout", { method: "POST" });
+  },
+  async changePassword(currentPassword: string, newPassword: string) {
+    await request<SuccessResponse<{ message: string }>>("/api/v1/auth/change-password", {
+      method: "POST", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+  },
   async createDraft(employeeCode: string, values: RequirementFormValues) {
-    const result = await request<SuccessResponse<RequirementDetail>>("/api/v1/purchase-requirements/drafts", employeeCode,
+    void employeeCode;
+    const result = await request<SuccessResponse<RequirementDetail>>("/api/v1/purchase-requirements/drafts",
       { method: "POST", body: JSON.stringify(draftPayload(values)) }, true);
     return result.data;
   },
   async updateDraft(employeeCode: string, current: RequirementDetail, values: RequirementFormValues) {
-    const result = await request<SuccessResponse<RequirementDetail>>(`/api/v1/purchase-requirements/${current.requirement_id}`, employeeCode,
+    void employeeCode;
+    const result = await request<SuccessResponse<RequirementDetail>>(`/api/v1/purchase-requirements/${current.requirement_id}`,
       { method: "PATCH", body: JSON.stringify({ ...draftPayload(values), version: current.version }) }, true);
     return result.data;
   },
   async getDetail(employeeCode: string, requirementId: number) {
-    return (await request<SuccessResponse<RequirementDetail>>(`/api/v1/purchase-requirements/${requirementId}`, employeeCode)).data;
+    void employeeCode;
+    return (await request<SuccessResponse<RequirementDetail>>(`/api/v1/purchase-requirements/${requirementId}`)).data;
   },
   async listMine(employeeCode: string, page = 1, pageSize = 20) {
-    return request<PageResponse<RequirementSummary>>(`/api/v1/purchase-requirements?mine=true&page=${page}&page_size=${pageSize}`, employeeCode);
+    void employeeCode;
+    return request<PageResponse<RequirementSummary>>(`/api/v1/purchase-requirements?mine=true&page=${page}&page_size=${pageSize}`);
   },
   async submit(employeeCode: string, current: RequirementDetail) {
+    void employeeCode;
     return (await request<SuccessResponse<{ status: string; version: number }>>(
-      `/api/v1/purchase-requirements/${current.requirement_id}/submit`, employeeCode,
+      `/api/v1/purchase-requirements/${current.requirement_id}/submit`,
       { method: "POST", body: JSON.stringify({ version: current.version, confirmed: true }) }, true)).data;
   },
   async cancel(employeeCode: string, current: RequirementDetail, reason: string) {
+    void employeeCode;
     return (await request<SuccessResponse<RequirementDetail>>(
-      `/api/v1/purchase-requirements/${current.requirement_id}/cancel`, employeeCode,
+      `/api/v1/purchase-requirements/${current.requirement_id}/cancel`,
       { method: "POST", body: JSON.stringify({ version: current.version, confirmed: true, reason }) }, true)).data;
   },
   async recommendations(employeeCode: string, current: RequirementDetail) {
-    return (await request<SuccessResponse<RecommendationResult>>("/api/v1/recommendations/historical-suppliers/search", employeeCode, {
+    void employeeCode;
+    return (await request<SuccessResponse<RecommendationResult>>("/api/v1/recommendations/historical-suppliers/search", {
       method: "POST", body: JSON.stringify({
         requirement_id: current.requirement_id, product_id: current.product_id,
         device_type: current.device_type, product_name: current.product_name,

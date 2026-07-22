@@ -18,6 +18,7 @@ from app.infrastructure.database import (
 from app.infrastructure.logging import configure_logging
 from app.modules.agent.router import router as agent_router
 from app.modules.agent.runtime import create_agent_runtime
+from app.modules.auth.router import router as auth_router
 from app.modules.requirement.router import recommendation_router
 from app.modules.requirement.router import router as requirement_router
 from app.shared.constants import APP_VERSION
@@ -71,11 +72,13 @@ def create_application(session_factory: AsyncSessionFactory | None = None) -> Fa
         version=APP_VERSION,
         lifespan=lifespan,
     )
+    application.state.runtime_settings = runtime_settings
     application.add_middleware(RequestContextMiddleware)
     application.add_exception_handler(RequestValidationError, validation_exception_handler)
     application.add_exception_handler(DomainError, domain_exception_handler)
     application.add_exception_handler(StarletteHTTPException, http_exception_handler)
     application.include_router(health_router)
+    application.include_router(auth_router)
     application.include_router(requirement_router)
     application.include_router(recommendation_router)
     application.include_router(agent_router)

@@ -685,3 +685,78 @@ Agent抽取：
 | created_at | DATETIME(6) | 是 | 首次成功执行时间 |
 
 唯一约束为 `actor_code + operation + idempotency_key`。本表只保存受控业务响应，不得写入令牌、数据库连接信息或未脱敏的模型输入输出。
+
+## 8. 登录、角色和楼宇数据范围
+
+登录账号与员工业务资料分开保存。`employee` 仍是人员主数据，采购申请、审批和采购完成继续关联员工；`user_account` 只负责密码、锁定状态和登录安全。一个账号可以同时拥有多个角色，例如楼长也可以以员工身份发起采购申请。
+
+### 8.1 user_account 登录账号表
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| id | BIGINT UNSIGNED | 是 | 账号 ID |
+| employee_id | BIGINT UNSIGNED | 是 | 员工外键，一名员工最多一个账号 |
+| password_hash | VARCHAR(255) | 是 | Argon2id 密码摘要，不保存明文和可逆密文 |
+| status | VARCHAR(20) | 是 | `ACTIVE`、`DISABLED` |
+| must_change_password | BOOLEAN | 是 | 保留字段，当前版本不强制首次登录修改密码 |
+| failed_login_count | INT | 是 | 连续登录失败次数 |
+| locked_until | DATETIME(6) | 否 | 临时锁定截止时间 |
+| password_changed_at | DATETIME(6) | 否 | 最近修改密码时间 |
+| last_login_at | DATETIME(6) | 否 | 最近成功登录时间 |
+| created_at / updated_at | DATETIME(6) | 是 | 创建和更新时间 |
+| version | INT | 是 | 乐观锁版本 |
+
+### 8.2 user_login_identifier 登录标识表
+
+保存可用于登录的工号或电话。`normalized_value` 在全系统唯一，工号去除首尾空格并转大写，电话去除空格、短横线和括号。员工联系方式变化时由账号管理服务同步，不允许客户端直接修改。
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| id | BIGINT UNSIGNED | 是 | 登录标识 ID |
+| account_id | BIGINT UNSIGNED | 是 | 账号外键 |
+| identifier_type | VARCHAR(20) | 是 | `EMPLOYEE_NO` 或 `PHONE` |
+| normalized_value | VARCHAR(191) | 是 | 规范化后的登录值，全局唯一 |
+| status | VARCHAR(20) | 是 | `ACTIVE`、`DISABLED` |
+| verified_at | DATETIME(6) | 否 | 电话完成核验的时间 |
+| created_at | DATETIME(6) | 是 | 创建时间 |
+
+### 8.3 role 与 user_role
+
+`role` 保存系统角色字典，初始角色为：
+
+- `EMPLOYEE`：普通员工，可创建和查看本人采购申请；
+- `BUILDING_MANAGER`：楼长（专业工程师），可处理职责楼宇内的待审批申请；
+- `PURCHASER`：采购员，可处理审批通过后的采购任务；
+- `ADMIN`：系统管理员，可管理账号、角色和基础数据。
+
+`user_role` 通过 `account_id + role_id` 建立多对多关系，并使用 `valid_from`、`valid_to` 表示角色有效期。所有用户都必须具有 `EMPLOYEE` 角色；楼长、采购员和管理员是在此基础上的附加角色。
+
+### 8.4 auth_session 服务端会话表
+
+网页登录成功后生成高强度随机会话令牌，浏览器只通过 `HttpOnly` Cookie 保存原始令牌，数据库只保存 SHA-256 摘要。
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| --- | --- | --- | --- |
+| id | BIGINT UNSIGNED | 是 | 会话 ID |
+| account_id | BIGINT UNSIGNED | 是 | 账号外键 |
+| session_token_hash | VARCHAR(64) | 是 | 会话令牌 SHA-256 摘要，唯一 |
+| created_at / expires_at | DATETIME(6) | 是 | 创建和绝对过期时间 |
+| last_seen_at | DATETIME(6) | 是 | 最近使用时间 |
+| revoked_at | DATETIME(6) | 否 | 退出登录或强制失效时间 |
+| ip_address | VARCHAR(64) | 否 | 登录来源地址，用于安全审计 |
+| user_agent | VARCHAR(500) | 否 | 浏览器信息，用于安全审计 |
+
+生产环境 Cookie 必须启用 `Secure`、`HttpOnly` 和 `SameSite=Strict`。退出登录、修改密码、禁用账号时撤销相应会话。
+
+### 8.5 building 与 employee_building_role
+
+`building` 保存楼宇编码、名称和启用状态。`employee_building_role` 保存员工在某一楼宇内的职责角色及有效期。楼长只能查询和审批本表中分配给自己的楼宇，禁止审批本人申请；采购员的全局业务角色由 `user_role` 控制。采购申请后续需关联 `building_id`，提交审批时据此创建楼长审批任务。
+
+### 8.6 登录与权限规则
+
+- 员工使用工号或已登记电话加密码登录，不开放自行注册；
+- 登录失败达到 5 次后临时锁定 15 分钟，成功登录后清零；
+- 密码不得写入日志、接口响应或 Git；当前版本不强制首次登录修改密码；
+- 后端从服务端会话计算当前员工、角色和楼宇范围，前端菜单隐藏不能代替后端鉴权；
+- 所有人都可发起采购申请，审批动作只允许 `BUILDING_MANAGER`，采购动作只允许 `PURCHASER`；
+- 本地自动化测试可以启用临时身份请求头，生产环境必须关闭。

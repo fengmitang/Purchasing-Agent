@@ -17,10 +17,7 @@
 第一轮只输出需求理解、文件范围、接口/数据库影响、实施步骤、测试计划和风险。获得确认后才能修改文件。
 
 ## 2. 范围和协作
-
-- 每个 Issue 只有一名负责人，另一名开发者负责审查。
 - 仅修改 Issue 的“允许修改”范围；需要越界时先解释原因并等待批准。
-- 公共 Schema、状态枚举、数据库设计和公开 Service/API 契约的变化，必须先更新对应文档并由另一名开发者确认。
 - A 主责工程底座、公共能力、身份权限、Agent、会话与需求基础。
 - B 主责产品/供应商、名单、推荐、审批、采购、交付、验收与入库。
 - `docs/`、`migrations/`、`pyproject.toml`、部署配置及本文件属于共同审查范围。
@@ -39,7 +36,6 @@ IntegrationClient <- BusinessService
 - Router 只处理协议、参数和响应，不直接访问 ORM、Repository 或提交事务。
 - Service 负责权限、数据范围、业务规则、状态机、事务、幂等和审计编排。
 - Repository 只负责数据访问，不承载业务授权和状态决策。
-- Agent Handler 只能调用受控 Business Service，不得直接访问数据库。
 - LLM 只负责理解、抽取和自然语言解释；不得决定硬过滤、评分、审批或正式状态变化。
 - 正式业务事实必须保存到 MySQL；会话上下文和 JSON 草稿不能成为唯一事实来源。
 
@@ -53,8 +49,6 @@ IntegrationClient <- BusinessService
 - 写操作必须在 Service 内定义事务边界；重复请求使用业务唯一键或幂等键返回原结果。
 
 ## 5. Agent 和 LLM
-
-- 首期不使用 LangGraph、AutoGen、CrewAI 等 Agent 编排框架，只使用显式 Scene/Stage、状态机和 HandlerRegistry。
 - 结构化模型输出必须经过目标 Pydantic Schema 的 `model_validate`。
 - Prompt 必须要求未知事实返回 `null`、歧义写入 `ambiguities`、不得编造。
 - 模型调用设置超时、有限重试、脱敏日志和调用记录；失败时提供表单或规则化降级。
