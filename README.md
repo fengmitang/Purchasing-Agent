@@ -10,7 +10,12 @@
 - 正式事实保存在 MySQL；Agent、Router 和 LLM 不直接写数据库或改变正式状态。
 - 强制调用方向：`Router -> Service -> Repository -> MySQL`。
 - 高风险操作必须经过身份/数据范围校验、明确确认、幂等控制和审计。
-- MVP 采用模块化单体、显式状态机和 Handler，不使用 Agent 编排框架。
+MVP 采用模块化单体和自研受控 Tool Calling Agent，不使用 LangGraph、
+AutoGen、CrewAI 等 Agent 编排框架。
+
+模型根据当前目标、对话上下文、会话状态和动态开放的工具集合决定下一步；
+所有工具参数经过 Schema 校验，正式业务写入必须通过 Business Service，
+模型不得直接访问数据库或自行改变正式状态。
 
 ## 固定技术栈
 
