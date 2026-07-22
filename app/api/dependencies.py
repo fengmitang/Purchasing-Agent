@@ -6,6 +6,7 @@ from fastapi import Header, Request
 
 from app.modules.auth.service import AuthService
 from app.modules.requirement.service import RequirementService
+from app.modules.workflow.service import WorkflowService
 from app.shared.errors import DomainError, ErrorCode
 from app.shared.identity import CurrentUser
 
@@ -48,3 +49,11 @@ def get_requirement_service(request: Request) -> RequirementService:
     if session_factory is None:
         raise DomainError(ErrorCode.INTERNAL_ERROR, "数据库服务尚未配置")
     return RequirementService(session_factory)
+
+
+def get_workflow_service(request: Request) -> WorkflowService:
+    """根据应用基础设施创建请求级审批采购工作流服务。"""
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise DomainError(ErrorCode.INTERNAL_ERROR, "数据库服务尚未配置")
+    return WorkflowService(session_factory)

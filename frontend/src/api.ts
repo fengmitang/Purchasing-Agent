@@ -1,4 +1,4 @@
-import type { CurrentUser, RecommendationResult, RequirementDetail, RequirementFormValues, RequirementSummary } from "./types";
+import type { ApprovalTask, BuildingOption, CurrentUser, ProcurementTask, RecommendationResult, RequirementDetail, RequirementFormValues, RequirementSummary } from "./types";
 
 interface SuccessResponse<T> { data: T; meta: { request_id: string }; }
 interface PageResponse<T> extends SuccessResponse<T[]> { page: { number: number; size: number; total: number }; }
@@ -45,7 +45,7 @@ async function request<T>(path: string, options: RequestInit = {}, isWrite = fal
 
 function draftPayload(values: RequirementFormValues) {
   return {
-    session_id: null, category_id: null, category_name: values.category_name || null,
+    session_id: null, building_id: values.building_id || null, category_id: null, category_name: values.category_name || null,
     application_reason: values.application_reason || null,
     application_location: values.application_location || null,
     device_type: values.device_type || null, product_id: null,
@@ -75,6 +75,40 @@ export const api = {
     await request<SuccessResponse<{ message: string }>>("/api/v1/auth/change-password", {
       method: "POST", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     });
+  },
+  async listBuildings() {
+    return (await request<SuccessResponse<BuildingOption[]>>("/api/v1/buildings")).data;
+  },
+  async listApprovalTasks(view: "pending" | "history" = "pending", page = 1, pageSize = 20) {
+    return request<PageResponse<ApprovalTask>>(`/api/v1/approvals/tasks?view=${view}&page=${page}&page_size=${pageSize}`);
+  },
+  async approvalDecision(task: ApprovalTask, action: "APPROVED" | "REJECTED", comment?: string) {
+    return (await request<SuccessResponse<{ status: string; version: number }>>(
+      `/api/v1/approvals/tasks/${task.requirement_id}/decision`,
+      { method: "POST", body: JSON.stringify({ version: task.version, action, comment: comment || null }) }, true)).data;
+  },
+  async listProcurementTasks(page = 1, pageSize = 20) {
+    return request<PageResponse<ProcurementTask>>(`/api/v1/procurement/tasks?page=${page}&page_size=${pageSize}`);
+  },
+  async startProcurement(task: ProcurementTask) {
+    return (await request<SuccessResponse<ProcurementTask>>(
+      `/api/v1/procurement/requirements/${task.requirement_id}/start`,
+      { method: "POST", body: JSON.stringify({ version: task.requirement_version }) }, true)).data;
+  },
+  async advanceProcurement(task: ProcurementTask, targetStatus: "QUOTED" | "CONTRACTED") {
+    return (await request<SuccessResponse<ProcurementTask>>(
+      `/api/v1/procurement/orders/${task.order_id}/advance`,
+      { method: "POST", body: JSON.stringify({ version: task.order_version, target_status: targetStatus, remark: null }) }, true)).data;
+  },
+  async completeProcurement(task: ProcurementTask, remark?: string) {
+    return (await request<SuccessResponse<ProcurementTask>>(
+      `/api/v1/procurement/orders/${task.order_id}/complete`,
+      { method: "POST", body: JSON.stringify({ version: task.order_version, remark: remark || null }) }, true)).data;
+  },
+  async rollbackProcurement(task: ProcurementTask) {
+    return (await request<SuccessResponse<ProcurementTask>>(
+      `/api/v1/procurement/orders/${task.order_id}/rollback`,
+      { method: "POST", body: JSON.stringify({ version: task.order_version }) }, true)).data;
   },
   async createDraft(employeeCode: string, values: RequirementFormValues) {
     void employeeCode;
@@ -107,6 +141,12 @@ export const api = {
     return (await request<SuccessResponse<RequirementDetail>>(
       `/api/v1/purchase-requirements/${current.requirement_id}/cancel`,
       { method: "POST", body: JSON.stringify({ version: current.version, confirmed: true, reason }) }, true)).data;
+  },
+  async revise(employeeCode: string, current: RequirementDetail) {
+    void employeeCode;
+    return (await request<SuccessResponse<RequirementDetail>>(
+      `/api/v1/purchase-requirements/${current.requirement_id}/revise`,
+      { method: "POST", body: JSON.stringify({ version: current.version, confirmed: true }) }, true)).data;
   },
   async recommendations(employeeCode: string, current: RequirementDetail) {
     void employeeCode;

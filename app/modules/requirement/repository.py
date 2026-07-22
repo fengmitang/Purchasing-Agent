@@ -3,6 +3,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.auth.models import Building
 from app.modules.requirement.models import (
     Employee,
     IdempotencyRecord,
@@ -42,6 +43,11 @@ class RequirementRepository:
 
     async def get_category(self, category_id: int) -> ProductCategory | None:
         return await self._session.get(ProductCategory, category_id)
+
+    async def get_building(self, building_id: int) -> Building | None:
+        return await self._session.scalar(
+            select(Building).where(Building.id == building_id, Building.status == "ACTIVE")
+        )
 
     async def get_product(self, product_id: int) -> Product | None:
         return await self._session.get(Product, product_id)

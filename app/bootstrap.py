@@ -19,6 +19,7 @@ from app.infrastructure.logging import configure_logging
 from app.modules.auth.router import router as auth_router
 from app.modules.requirement.router import recommendation_router
 from app.modules.requirement.router import router as requirement_router
+from app.modules.workflow.router import approval_router, building_router, procurement_router
 from app.shared.constants import APP_VERSION
 from app.shared.errors import DomainError
 from app.shared.exception_handlers import (
@@ -71,4 +72,7 @@ def create_application(session_factory: AsyncSessionFactory | None = None) -> Fa
     application.include_router(auth_router)
     application.include_router(requirement_router)
     application.include_router(recommendation_router)
+    application.include_router(building_router)
+    application.include_router(approval_router)
+    application.include_router(procurement_router)
     return application

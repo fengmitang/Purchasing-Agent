@@ -82,6 +82,7 @@ class PurchaseRequirement(Base):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime)
     revision_no: Mapped[int] = mapped_column(Integer)
     previous_requirement_id: Mapped[int | None] = mapped_column(BigInteger)
+    building_id: Mapped[int | None] = mapped_column(BigInteger)
     category_id: Mapped[int | None] = mapped_column(BigInteger)
     category_name: Mapped[str | None] = mapped_column(String(100))
     application_reason: Mapped[str | None] = mapped_column(Text)
@@ -125,7 +126,7 @@ class PurchaseOrder(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     order_no: Mapped[str] = mapped_column(String(100))
     requirement_id: Mapped[int] = mapped_column(BigInteger)
-    product_id: Mapped[int] = mapped_column(BigInteger)
+    product_id: Mapped[int | None] = mapped_column(BigInteger)
     supplier_id: Mapped[int | None] = mapped_column(BigInteger)
     quantity: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
@@ -133,7 +134,37 @@ class PurchaseOrder(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
     supplier_name: Mapped[str | None] = mapped_column(String(200))
     unit_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    purchaser_id: Mapped[int | None] = mapped_column(BigInteger)
+    purchaser_employee_no: Mapped[str | None] = mapped_column(String(50))
+    purchaser_name: Mapped[str | None] = mapped_column(String(100))
+    purchaser_phone: Mapped[str | None] = mapped_column(String(50))
+    purchasing_started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    quoted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    contracted_at: Mapped[datetime | None] = mapped_column(DateTime)
     received_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+    version: Mapped[int] = mapped_column(Integer)
+
+
+class PurchaseApproval(Base):
+    """楼长对采购申请某一版本作出的审批记录。"""
+
+    __tablename__ = "purchase_approval"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    requirement_id: Mapped[int] = mapped_column(BigInteger)
+    revision_no: Mapped[int] = mapped_column(Integer)
+    approver_id: Mapped[int] = mapped_column(BigInteger)
+    approver_employee_no: Mapped[str | None] = mapped_column(String(50))
+    approver_name: Mapped[str] = mapped_column(String(100))
+    approver_phone: Mapped[str | None] = mapped_column(String(50))
+    action: Mapped[str] = mapped_column(String(30))
+    comment: Mapped[str | None] = mapped_column(Text)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime)
+    acted_at: Mapped[datetime] = mapped_column(DateTime)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class Recommendation(Base):

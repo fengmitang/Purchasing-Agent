@@ -43,6 +43,9 @@ class RequirementDraftFields(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     session_id: str | None = Field(default=None, max_length=100, description="来源 Agent 会话编号")
+    building_id: int | None = Field(
+        default=None, gt=0, description="设备所属楼宇数据库 ID；保存草稿时可空，提交时必填"
+    )
     category_id: int | None = Field(
         default=None, gt=0, description="已匹配到的产品分类数据库 ID；不知道时留空"
     )
@@ -158,6 +161,7 @@ class RequirementDetail(BaseModel):
     version: int
     applicant: ApplicantSnapshot
     session_id: str | None
+    building_id: int | None = None
     category_id: int | None
     category_name: str | None
     application_reason: str | None
@@ -220,6 +224,13 @@ class CancelRequirementDraft(BaseModel):
     version: int = Field(gt=0, description="采购草稿当前版本号")
     confirmed: Literal[True] = Field(description="员工是否已经人工确认取消；只能填写 true")
     reason: str = Field(min_length=1, max_length=1000, description="取消采购草稿的原因")
+
+
+class ReviseRejectedRequirement(BaseModel):
+    """员工基于被驳回申请创建下一版本草稿。"""
+
+    version: int = Field(gt=0, description="被驳回申请的当前版本号")
+    confirmed: Literal[True] = Field(description="员工是否确认创建修改版本；只能填写 true")
 
 
 class RequirementSummary(BaseModel):

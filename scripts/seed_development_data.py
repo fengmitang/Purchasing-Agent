@@ -567,6 +567,31 @@ def price_for(base_price: str, index: int) -> Decimal:
     )
 
 
+def latest_activity_at(
+    status: str, submitted_at: datetime | None, requested_at: datetime, index: int
+) -> datetime:
+    """计算测试单据最后业务动作时间，避免使用数据库服务器的当前时区。"""
+    if submitted_at is None:
+        return requested_at
+    if status == "PENDING_APPROVAL":
+        return submitted_at
+
+    acted_at = submitted_at + timedelta(hours=20)
+    if status in {"APPROVED", "REJECTED"}:
+        return acted_at
+    started_at = acted_at + timedelta(hours=4)
+    if status == "PURCHASING":
+        return started_at
+    quoted_at = started_at + timedelta(days=2)
+    if status == "QUOTED":
+        return quoted_at
+    contracted_at = quoted_at + timedelta(days=3)
+    if status == "CONTRACTED":
+        return contracted_at
+    received_at = contracted_at + timedelta(days=10 + index % 10)
+    return received_at + timedelta(hours=2)
+
+
 def build_requirement_specs() -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for index in range(REQUIREMENT_COUNT):
@@ -603,6 +628,7 @@ def build_requirement_specs() -> list[dict[str, object]]:
                 "status": status,
                 "requested_at": requested_at,
                 "submitted_at": submitted_at,
+                "updated_at": latest_activity_at(status, submitted_at, requested_at, index),
                 "revision_no": revision_no,
                 "previous_index": previous_index,
                 "reason": REASONS[(template_index + index) % len(REASONS)],
@@ -653,9 +679,9 @@ async def seed_database() -> dict[str, int]:
                     "Refusing to seed a database other than the local purchasing_agent database"
                 )
             revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-            if revision != "0005_auth_rbac_foundation":
+            if revision != "0006_workflow_routing":
                 raise RuntimeError(
-                    "Database must be upgraded to 0005_auth_rbac_foundation before seeding"
+                    "Database must be upgraded to 0006_workflow_routing before seeding"
                 )
             existing_seed_rows = await session.scalar(
                 text(
@@ -814,13 +840,14 @@ async def seed_database() -> dict[str, int]:
                     "application_location, device_type, product_id, product_name, "
                     "product_full_name, "
                     "brand, model, specification, quantity, unit, supplier_id, supplier_name, "
-                    "unit_price, total_amount, currency, status, source_reference, created_at) "
+                    "unit_price, total_amount, currency, status, source_reference, created_at, "
+                    "updated_at) "
                     "VALUES (:requirement_no, :session_id, :employee_id, :employee_no, :name, "
                     ":phone, :requested_at, :submitted_at, :revision_no, :previous_requirement_id, "
                     ":category_id, :category_name, :application_reason, :application_location, "
                     ":device_type, :product_id, :product_name, :product_full_name, :brand, :model, "
                     ":specification, :quantity, :unit, :supplier_id, :supplier_name, :unit_price, "
-                    ":total_amount, 'CNY', :status, :source_reference, :created_at)",
+                    ":total_amount, 'CNY', :status, :source_reference, :created_at, :updated_at)",
                     {
                         "requirement_no": f"DEV-REQ-{index + 1:05d}",
                         "session_id": session_id,
@@ -852,6 +879,7 @@ async def seed_database() -> dict[str, int]:
                         "status": spec["status"],
                         "source_reference": spec["source_reference"],
                         "created_at": spec["requested_at"],
+                        "updated_at": spec["updated_at"],
                     },
                 )
                 requirement_ids.append(requirement_id)
@@ -1026,12 +1054,13 @@ async def seed_database() -> dict[str, int]:
                         "quantity, unit_price, amount, status, purchaser_id, "
                         "purchaser_employee_no, "
                         "purchaser_name, purchaser_phone, purchasing_started_at, quoted_at, "
-                        "contracted_at, received_at, completed_at, created_at) VALUES (:order_no, "
+                        "contracted_at, received_at, completed_at, created_at, updated_at) "
+                        "VALUES (:order_no, "
                         ":requirement_id, :product_id, :supplier_id, :supplier_name, :quantity, "
                         ":unit_price, :amount, :status, :purchaser_id, :employee_no, :name, "
                         ":phone, "
                         ":started_at, :quoted_at, :contracted_at, :received_at, :completed_at, "
-                        ":created_at)",
+                        ":created_at, :updated_at)",
                         {
                             "order_no": f"DEV-PO-{index + 1:05d}",
                             "requirement_id": requirement_id,
@@ -1052,6 +1081,7 @@ async def seed_database() -> dict[str, int]:
                             "received_at": received_at,
                             "completed_at": completed_at,
                             "created_at": acted_at,
+                            "updated_at": spec["updated_at"],
                         },
                     )
                     counts["purchase_order"] += 1

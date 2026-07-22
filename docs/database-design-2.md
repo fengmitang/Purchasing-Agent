@@ -549,6 +549,7 @@ Agent抽取：
 | submitted_at | DATETIME(6) | 否 | 当前版本提交审批时间 |
 | revision_no | INT | 是 | 版本号，默认 1 |
 | previous_requirement_id | BIGINT UNSIGNED | 否 | 上一版本申请外键 |
+| building_id | BIGINT UNSIGNED | 否 | 所属楼宇外键；草稿可空，提交审批前必填 |
 | category_id | BIGINT UNSIGNED | 否 | 产品分类外键 |
 | category_name | VARCHAR(100) | 否 | 申请时分类名称快照；新申请只能选择八个规定类别之一 |
 | application_reason | TEXT | 否 | 采购原因 |
@@ -630,6 +631,10 @@ Agent抽取：
 
 入库完成时必须在同一事务中写入 `received_at` 和 `completed_at`，将采购单状态更新为
 `COMPLETED`，并追加状态历史。询价核价和合同不建立独立业务表。
+
+员工可能申请主数据中尚不存在的新设备，因此 `purchase_order.product_id` 允许为空；采购单仍通过
+`requirement_id` 读取员工确认的设备名称、品牌、型号和规格快照。申请提交后，系统使用
+`purchase_requirement.building_id` 与 `employee_building_role` 实时确定楼长待审批范围。
 
 ## 7.5 purchase_status_history 状态历史表
 

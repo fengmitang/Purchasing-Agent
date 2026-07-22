@@ -150,6 +150,19 @@ class StubRequirementService:
         detail = requirement_detail(version=command.version + 1)
         return detail.model_copy(update={"status": "CANCELLED"})
 
+    async def revise_rejected(self, requirement_id, command, context):
+        assert requirement_id == 501
+        assert command.version == 4
+        assert context.idempotency_key == "revise-501"
+        return requirement_detail().model_copy(
+            update={
+                "requirement_id": 502,
+                "requirement_no": "PR-20260722-0502",
+                "status": "DRAFT",
+                "version": 1,
+            }
+        )
+
 
 def build_client(service: StubRequirementService) -> TestClient:
     application = create_application()
@@ -262,3 +275,16 @@ def test_submit_and_cancel_require_explicit_confirmation() -> None:
     assert submitted.json()["data"]["status"] == "PENDING_APPROVAL"
     assert cancelled.status_code == 200
     assert cancelled.json()["data"]["status"] == "CANCELLED"
+
+
+def test_rejected_requirement_can_create_a_new_editable_draft() -> None:
+    response = build_client(StubRequirementService()).post(
+        "/api/v1/purchase-requirements/501/revise",
+        headers={"Idempotency-Key": "revise-501"},
+        json={"version": 4, "confirmed": True},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["data"]["requirement_id"] == 502
+    assert response.json()["data"]["status"] == "DRAFT"
+    assert response.json()["data"]["version"] == 1

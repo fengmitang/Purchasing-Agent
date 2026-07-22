@@ -32,13 +32,15 @@ async def seed_auth() -> dict[str, int]:
         "buildings": 0,
         "scopes": 0,
         "first_login_flags_cleared": 0,
+        "requirements_routed": 0,
+        "timestamps_repaired": 0,
     }
     now = datetime.now(UTC).replace(tzinfo=None)
     try:
         async with transaction_scope(factory) as session:
             revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-            if revision != "0005_auth_rbac_foundation":
-                raise RuntimeError("请先把数据库迁移到 0005_auth_rbac_foundation")
+            if revision != "0006_workflow_routing":
+                raise RuntimeError("请先把数据库迁移到 0006_workflow_routing")
 
             role_rows = (
                 await session.execute(
@@ -161,6 +163,74 @@ async def seed_auth() -> dict[str, int]:
                     {"employee_id": employee["id"], "building_id": building_id, "now": now},
                 )
                 counts["scopes"] += max(result.rowcount, 0)
+
+            for index, building_id in enumerate(buildings):
+                result = await session.execute(
+                    text(
+                        "UPDATE purchase_requirement "
+                        "SET building_id = :building_id, updated_at = updated_at "
+                        "WHERE building_id IS NULL "
+                        "AND source_reference LIKE 'dev-seed-v1:%' "
+                        "AND MOD(id - 1, :building_count) = :building_index"
+                    ),
+                    {
+                        "building_id": building_id,
+                        "building_count": len(buildings),
+                        "building_index": index,
+                    },
+                )
+                counts["requirements_routed"] += max(result.rowcount, 0)
+            if buildings:
+                result = await session.execute(
+                    text(
+                        "UPDATE purchase_requirement "
+                        "SET building_id = :building_id, updated_at = updated_at "
+                        "WHERE building_id IS NULL AND source_reference IS NULL"
+                    ),
+                    {"building_id": buildings[0]},
+                )
+                counts["requirements_routed"] += max(result.rowcount, 0)
+
+            # 早期测试数据没有显式写 updated_at，会受 MySQL 服务器本地时区影响。
+            # 仅修复带 DEV 标记的测试记录，人工创建的真实申请不会被修改。
+            result = await session.execute(
+                text(
+                    "UPDATE purchase_order AS purchase_order "
+                    "JOIN purchase_requirement AS requirement "
+                    "ON requirement.id = purchase_order.requirement_id "
+                    "SET purchase_order.updated_at = COALESCE("
+                    "purchase_order.completed_at, purchase_order.received_at, "
+                    "purchase_order.contracted_at, purchase_order.quoted_at, "
+                    "purchase_order.purchasing_started_at, purchase_order.created_at) "
+                    "WHERE requirement.source_reference LIKE 'dev-seed-v1:%'"
+                )
+            )
+            counts["timestamps_repaired"] += max(result.rowcount, 0)
+            result = await session.execute(
+                text(
+                    "UPDATE purchase_requirement AS requirement "
+                    "LEFT JOIN purchase_order AS purchase_order "
+                    "ON purchase_order.requirement_id = requirement.id "
+                    "LEFT JOIN (SELECT requirement_id, MAX(acted_at) AS acted_at "
+                    "FROM purchase_approval GROUP BY requirement_id) AS approval "
+                    "ON approval.requirement_id = requirement.id "
+                    "SET requirement.updated_at = COALESCE("
+                    "purchase_order.updated_at, approval.acted_at, requirement.submitted_at, "
+                    "requirement.requested_at, requirement.created_at) "
+                    "WHERE requirement.source_reference LIKE 'dev-seed-v1:%'"
+                )
+            )
+            counts["timestamps_repaired"] += max(result.rowcount, 0)
+
+            # 同时纠正早期楼宇回填留下的少量未来时间；仅匹配明显晚于 UTC 当前时间的记录。
+            result = await session.execute(
+                text(
+                    "UPDATE purchase_requirement "
+                    "SET updated_at = COALESCE(submitted_at, requested_at, created_at) "
+                    "WHERE updated_at > UTC_TIMESTAMP(6) + INTERVAL 1 MINUTE"
+                )
+            )
+            counts["timestamps_repaired"] += max(result.rowcount, 0)
         return counts
     finally:
         await engine.dispose()

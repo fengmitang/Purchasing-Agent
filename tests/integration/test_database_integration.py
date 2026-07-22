@@ -170,6 +170,11 @@ async def get_workflow_schema(database_url: str) -> dict[str, object]:
                         for column in inspect(sync_connection).get_columns("purchase_requirement")
                         if column["name"] == "product_name"
                     ),
+                    "order_product_id_nullable": next(
+                        column["nullable"]
+                        for column in inspect(sync_connection).get_columns("purchase_order")
+                        if column["name"] == "product_id"
+                    ),
                     "idempotency_columns": {
                         column["name"]
                         for column in inspect(sync_connection).get_columns("idempotency_record")
@@ -226,7 +231,7 @@ def test_empty_database_migration_has_one_head(monkeypatch: pytest.MonkeyPatch) 
     alembic_config = Config("alembic.ini")
     script = ScriptDirectory.from_config(alembic_config)
 
-    assert script.get_heads() == ["0005_auth_rbac_foundation"]
+    assert script.get_heads() == ["0006_workflow_routing"]
 
     command.upgrade(alembic_config, "head")
     assert asyncio.run(get_table_names(database_url)) == DEMO_TABLES | {"alembic_version"}
@@ -245,6 +250,7 @@ def test_empty_database_migration_has_one_head(monkeypatch: pytest.MonkeyPatch) 
         "submitted_at",
         "revision_no",
         "previous_requirement_id",
+        "building_id",
         "application_reason",
         "application_location",
         "device_type",
@@ -257,6 +263,7 @@ def test_empty_database_migration_has_one_head(monkeypatch: pytest.MonkeyPatch) 
         "version",
     } <= workflow_schema["requirement_columns"]
     assert workflow_schema["requirement_product_name_nullable"] is True
+    assert workflow_schema["order_product_id_nullable"] is True
     assert {
         "actor_code",
         "operation",
