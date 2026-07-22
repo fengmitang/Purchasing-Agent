@@ -19,6 +19,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+agent = [
+    "anthropic>=0.40,<1.0",
+    "httpx>=0.28,<1.0",
+    "openai>=1.60,<2.0",
+    "redis>=5.2,<6.0",
+]
 dev = [
     "httpx2>=2.7,<3.0",
     "pytest>=8,<9",

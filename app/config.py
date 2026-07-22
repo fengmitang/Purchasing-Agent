@@ -54,3 +54,32 @@ class Settings(RuntimeSettings):
     def sqlalchemy_database_url(self) -> str:
         """Return the secret URL only at the database integration boundary."""
         return self.database_url.get_secret_value()
+
+
+class AgentSettings(RuntimeSettings):
+    """Optional Agent runtime settings; missing configuration keeps chat safely disabled."""
+
+    agent_enabled: bool = False
+    agent_provider: Literal["anthropic", "openai"] = "anthropic"
+    agent_model: str = "claude-3-5-sonnet-20241022"
+    agent_api_key: SecretStr | None = None
+    agent_base_url: str | None = None
+    agent_timeout_seconds: float = 15.0
+    agent_max_retries: int = 1
+    agent_redis_url: SecretStr | None = None
+    agent_session_ttl_seconds: int = 604_800
+    agent_allow_in_memory: bool = False
+
+    @field_validator("agent_timeout_seconds")
+    @classmethod
+    def validate_agent_timeout(cls, value: float) -> float:
+        if value <= 0 or value > 120:
+            raise ValueError("AGENT_TIMEOUT_SECONDS must be between 0 and 120")
+        return value
+
+    @field_validator("agent_max_retries")
+    @classmethod
+    def validate_agent_retries(cls, value: int) -> int:
+        if value < 0 or value > 3:
+            raise ValueError("AGENT_MAX_RETRIES must be between 0 and 3")
+        return value
