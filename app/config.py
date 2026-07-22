@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -20,12 +20,26 @@ class RuntimeSettings(BaseSettings):
 
     environment: Literal["local", "test", "staging", "production"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    auth_session_ttl_seconds: int = Field(default=28_800, ge=300, le=604_800)
+    auth_session_cookie_name: str = Field(default="pa_session", min_length=1, max_length=64)
+    auth_cookie_secure: bool = False
+    allow_dev_identity_headers: bool = True
 
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> object:
         """Accept conventional case-insensitive log-level names."""
         return value.upper() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_production_authentication(self) -> "RuntimeSettings":
+        """生产环境必须使用 HTTPS Cookie 并关闭开发身份请求头。"""
+        if self.environment == "production":
+            if not self.auth_cookie_secure:
+                raise ValueError("生产环境必须设置 AUTH_COOKIE_SECURE=true")
+            if self.allow_dev_identity_headers:
+                raise ValueError("生产环境必须设置 ALLOW_DEV_IDENTITY_HEADERS=false")
+        return self
 
 
 class Settings(RuntimeSettings):

@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.16,<2.0",
+    "argon2-cffi>=23,<26",
     "asyncmy>=0.2,<1.0",
     "cryptography>=46,<50",
     "fastapi>=0.115,<1.0",
