@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import Header, Request
 
+from app.modules.agent.chat_service import AgentChatService
 from app.modules.auth.service import AuthService
 from app.modules.requirement.service import RequirementService
 from app.shared.errors import DomainError, ErrorCode
@@ -48,3 +49,10 @@ def get_requirement_service(request: Request) -> RequirementService:
     if session_factory is None:
         raise DomainError(ErrorCode.INTERNAL_ERROR, "数据库服务尚未配置")
     return RequirementService(session_factory)
+
+
+def get_agent_chat_service(request: Request) -> AgentChatService:
+    service = getattr(request.app.state, "agent_chat_service", None)
+    if service is None:
+        raise DomainError(ErrorCode.AGENT_UNAVAILABLE, "Agent 服务尚未配置")
+    return service

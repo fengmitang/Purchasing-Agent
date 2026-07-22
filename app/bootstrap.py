@@ -9,13 +9,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.health import router as health_router
 from app.api.middleware import RequestContextMiddleware
-from app.config import RuntimeSettings, Settings
+from app.config import AgentSettings, RuntimeSettings, Settings
 from app.infrastructure.database import (
     AsyncSessionFactory,
     create_database_engine,
     create_session_factory,
 )
 from app.infrastructure.logging import configure_logging
+from app.modules.agent.router import router as agent_router
+from app.modules.agent.runtime import create_agent_runtime
 from app.modules.auth.router import router as auth_router
 from app.modules.requirement.router import recommendation_router
 from app.modules.requirement.router import router as requirement_router
@@ -35,23 +37,31 @@ def create_application(session_factory: AsyncSessionFactory | None = None) -> Fa
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        application.state.agent_chat_service = None
         if session_factory is not None:
-            application.state.session_factory = session_factory
-            yield
-            return
+            active_session_factory = session_factory
+            engine = None
+        else:
+            try:
+                settings = Settings()
+            except ValueError:
+                yield
+                return
 
-        try:
-            settings = Settings()
-        except ValueError:
-            yield
-            return
+            engine = create_database_engine(settings)
+            active_session_factory = create_session_factory(engine)
 
-        engine = create_database_engine(settings)
-        application.state.session_factory = create_session_factory(engine)
+        application.state.session_factory = active_session_factory
+        agent_runtime = create_agent_runtime(AgentSettings(), active_session_factory)
+        if agent_runtime is not None:
+            application.state.agent_chat_service = agent_runtime.chat_service
         try:
             yield
         finally:
-            await engine.dispose()
+            if agent_runtime is not None:
+                await agent_runtime.close()
+            if engine is not None:
+                await engine.dispose()
 
     application = FastAPI(
         title="数据中心采购 Agent 后端接口",
@@ -71,4 +81,5 @@ def create_application(session_factory: AsyncSessionFactory | None = None) -> Fa
     application.include_router(auth_router)
     application.include_router(requirement_router)
     application.include_router(recommendation_router)
+    application.include_router(agent_router)
     return application
