@@ -575,6 +575,7 @@ Agent 只能依赖 `error.code` 和结构化详情做程序判断，不得解析
 - Router 只负责身份、Header、请求/响应 Schema 和分页参数，调用 `AgentChatService`。
 - `AgentChatService` 负责编排会话锁、幂等、历史、意图、Agent 调用和结果保存。
 - `GENERAL_QUERY` 不注册任何工具；采购意图只暴露既有受控采购工具。
+- `submit_requirement` 仅在本轮意图为 `CONFIRM_SUBMISSION` 且存在活动草稿时暴露；工具必须先读取数据库最新详情和版本，并且只有真实返回 `PENDING_APPROVAL` 后 Agent 才能声称提交成功。
 - `AgentContext` 接收 Router 已验证的 `CurrentUser`，不得解析或持久化原始 Authorization。
 - Anthropic 与 OpenAI 兼容客户端统一实现 `AgentModelProtocol`；Provider 只由服务端配置选择。
 - Redis 保存最近 100 条短期消息，TTL 默认 7 天；模型最多回放最近 12 条成功消息。

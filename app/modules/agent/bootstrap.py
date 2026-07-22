@@ -11,6 +11,7 @@ from app.modules.agent.tools.requirement_tools import (
     CreateRequirementDraftTool,
     GetRequirementDetailTool,
     StartNewRequirementTool,
+    SubmitRequirementTool,
     SwitchActiveRequirementTool,
     UpdateRequirementDraftTool,
 )
@@ -30,6 +31,7 @@ def build_procurement_agent_service(
     registry.register(GetRequirementDetailTool(backend))
     registry.register(UpdateRequirementDraftTool(backend))
     registry.register(SwitchActiveRequirementTool(backend))
+    registry.register(SubmitRequirementTool(backend))
     runner = ProcurementAgentRunner(
         model=model,
         registry=registry,

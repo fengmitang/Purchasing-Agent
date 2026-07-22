@@ -2,7 +2,7 @@ from typing import Any
 
 import httpx
 
-from app.modules.agent.procurement.schemas import RequirementDetail
+from app.modules.agent.procurement.schemas import RequirementDetail, RequirementSubmissionResult
 
 
 class ProcurementBackendError(RuntimeError):
@@ -22,7 +22,7 @@ class ProcurementBackendError(RuntimeError):
 
 
 class ProcurementBackendClient:
-    """只封装已约定的创建草稿、增量更新和详情查询接口。"""
+    """封装采购草稿创建、查询、更新和正式提交接口。"""
 
     def __init__(
         self,
@@ -88,6 +88,25 @@ class ProcurementBackendClient:
             idempotency_key=idempotency_key,
         )
         return RequirementDetail.model_validate(data)
+
+    async def submit(
+        self,
+        requirement_id: int,
+        payload: dict[str, Any],
+        *,
+        authorization: str | None,
+        request_id: str,
+        idempotency_key: str,
+    ) -> RequirementSubmissionResult:
+        data = await self._request(
+            "POST",
+            f"/api/v1/purchase-requirements/{requirement_id}/submit",
+            payload=payload,
+            authorization=authorization,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+        )
+        return RequirementSubmissionResult.model_validate(data)
 
     async def _request(
         self,

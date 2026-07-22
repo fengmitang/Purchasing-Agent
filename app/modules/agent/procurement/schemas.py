@@ -1,5 +1,6 @@
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -133,6 +134,14 @@ class RequirementDetail(BaseModel):
     requested_at: str | None = None
     submitted_at: str | None = None
     updated_at: str | None = None
+
+
+class RequirementSubmissionResult(BaseModel):
+    requirement_id: int
+    requirement_no: str
+    status: Literal["PENDING_APPROVAL"]
+    version: int
+    submitted_at: datetime
 
 
 class RequirementSessionReference(BaseModel):

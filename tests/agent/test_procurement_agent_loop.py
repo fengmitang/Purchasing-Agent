@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from datetime import UTC, datetime
 
 try:
     import anthropic  # noqa: F401
@@ -13,7 +14,11 @@ from app.modules.agent.bootstrap import build_procurement_agent_service
 from app.modules.agent.enums import AgentScene, AgentStage
 from app.modules.agent.intent_recognizer import IntentCategory
 from app.modules.agent.model import AgentModelResponse, AgentToolCall
-from app.modules.agent.procurement.schemas import ProcurementSessionState, RequirementDetail
+from app.modules.agent.procurement.schemas import (
+    ProcurementSessionState,
+    RequirementDetail,
+    RequirementSubmissionResult,
+)
 from app.modules.agent.procurement.session_store import InMemoryProcurementSessionStore
 from app.shared.identity import CurrentUser
 
@@ -61,6 +66,7 @@ class FakeBackend:
         self.create_calls = []
         self.get_calls = []
         self.update_calls = []
+        self.submit_calls = []
 
     async def create_draft(self, payload, **kwargs):
         self.create_calls.append((payload, kwargs))
@@ -79,6 +85,24 @@ class FakeBackend:
             update={"version": self.detail.version + 1, "missing_fields": [], **updates}
         )
         return self.detail
+
+    async def submit(self, requirement_id, payload, **kwargs):
+        self.submit_calls.append((requirement_id, payload, kwargs))
+        result = RequirementSubmissionResult(
+            requirement_id=requirement_id,
+            requirement_no=self.detail.requirement_no,
+            status="PENDING_APPROVAL",
+            version=self.detail.version + 1,
+            submitted_at=datetime(2026, 7, 22, 8, 0, tzinfo=UTC),
+        )
+        self.detail = self.detail.model_copy(
+            update={
+                "status": result.status,
+                "version": result.version,
+                "submitted_at": result.submitted_at.isoformat(),
+            }
+        )
+        return result
 
 
 class MultiDraftBackend(FakeBackend):
@@ -244,24 +268,78 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("没有可执行", result.response)
         self.assertIn("TOOL_NOT_ALLOWED", model.calls[1]["messages"][-1]["content"][0]["content"])
 
-    async def test_confirmation_only_gets_detail_and_cannot_claim_submission(self):
+    async def test_explicit_confirmation_reads_latest_detail_and_submits(self):
         backend = FakeBackend(draft_detail(missing_fields=[], conflicts=[]))
         store = InMemoryProcurementSessionStore()
         store.save("employee-1", "session-001", self._state())
         model = QueueModel(
             tool_decision("get_requirement_detail", {}),
-            AgentModelResponse(text="采购需求已成功提交。"),
+            tool_decision("submit_requirement", {"confirmed": True}, "submit-1"),
+            AgentModelResponse(text="采购申请已提交审批。"),
         )
         service, _ = self.make_service(backend, model, store)
 
         result = await self.call(service, IntentCategory.CONFIRM_SUBMISSION, "确认提交")
 
-        self.assertEqual(1, len(backend.get_calls))
-        self.assertEqual([], backend.update_calls)
-        self.assertNotIn("成功提交", result.response)
-        self.assertIn("尚未正式提交", result.response)
+        self.assertEqual(2, len(backend.get_calls))
+        self.assertEqual(1, len(backend.submit_calls))
+        self.assertEqual(
+            {"version": 1, "confirmed": True, "recommendation_id": None},
+            backend.submit_calls[0][1],
+        )
+        self.assertEqual("submit-501-v1", backend.submit_calls[0][2]["idempotency_key"])
+        self.assertIn("已提交审批", result.response)
+        self.assertEqual("PENDING_APPROVAL", result.procurement_state.status)
+        self.assertEqual(AgentStage.SUBMITTED, result.stage)
         available = {item["name"] for item in model.calls[0]["tools"]}
-        self.assertEqual({"get_requirement_detail"}, available)
+        self.assertEqual({"get_requirement_detail", "submit_requirement"}, available)
+
+    async def test_confirmation_without_successful_submit_cannot_claim_submission(self):
+        backend = FakeBackend(draft_detail(missing_fields=[], conflicts=[]))
+        store = InMemoryProcurementSessionStore()
+        store.save("employee-1", "session-001", self._state())
+        model = QueueModel(AgentModelResponse(text="采购需求已成功提交。"))
+        service, _ = self.make_service(backend, model, store)
+
+        result = await self.call(service, IntentCategory.CONFIRM_SUBMISSION, "确认提交")
+
+        self.assertEqual([], backend.submit_calls)
+        self.assertNotIn("成功提交", result.response)
+        self.assertIn("没有取得正式提交成功结果", result.response)
+
+    async def test_incomplete_requirement_is_not_submitted(self):
+        backend = FakeBackend(draft_detail(missing_fields=["supplier_name"], conflicts=[]))
+        store = InMemoryProcurementSessionStore()
+        store.save("employee-1", "session-001", self._state())
+        model = QueueModel(
+            tool_decision("submit_requirement", {"confirmed": True}, "submit-incomplete"),
+            AgentModelResponse(text="供应商尚未填写，当前没有执行提交。"),
+        )
+        service, _ = self.make_service(backend, model, store)
+
+        result = await self.call(service, IntentCategory.CONFIRM_SUBMISSION, "确认提交")
+
+        self.assertEqual([], backend.submit_calls)
+        self.assertEqual("DRAFT", result.procurement_state.status)
+        self.assertIn("没有执行提交", result.response)
+        tool_result = model.calls[1]["messages"][-1]["content"][0]["content"]
+        self.assertIn("REQUIREMENT_INCOMPLETE", tool_result)
+
+    async def test_submit_tool_is_not_available_without_confirmation_intent(self):
+        backend = FakeBackend(draft_detail(missing_fields=[], conflicts=[]))
+        store = InMemoryProcurementSessionStore()
+        store.save("employee-1", "session-001", self._state())
+        model = QueueModel(
+            tool_decision("submit_requirement", {"confirmed": True}),
+            AgentModelResponse(text="没有执行提交。"),
+        )
+        service, _ = self.make_service(backend, model, store)
+
+        await self.call(service, IntentCategory.MODIFY_REQUIREMENT, "帮我看看草稿")
+
+        self.assertEqual([], backend.submit_calls)
+        tool_result = model.calls[1]["messages"][-1]["content"][0]["content"]
+        self.assertIn("TOOL_NOT_ALLOWED", tool_result)
 
     async def test_cancellation_cannot_claim_an_unsupported_state_change(self):
         backend = FakeBackend(draft_detail())

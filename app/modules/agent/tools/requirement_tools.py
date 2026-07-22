@@ -1,10 +1,12 @@
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.agent.context import AgentContext
+from app.modules.agent.enums import AgentStage
+from app.modules.agent.intent_recognizer import IntentCategory
 from app.modules.agent.procurement.idempotency import update_idempotency_key
 from app.modules.agent.procurement.protocols import RequirementBackendProtocol
 from app.modules.agent.procurement.schemas import (
@@ -13,6 +15,7 @@ from app.modules.agent.procurement.schemas import (
     RequirementDetail,
     RequirementDraftFields,
     RequirementSessionReference,
+    RequirementSubmissionResult,
 )
 from app.modules.agent.state_machine import state_from_detail
 from app.modules.agent.tools.base import AgentTool, ToolExecutionResult
@@ -80,6 +83,12 @@ class SwitchActiveRequirementInput(BaseModel):
 
 class UpdateRequirementDraftInput(DraftExtraction):
     model_config = ConfigDict(extra="forbid")
+
+
+class SubmitRequirementInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmed: Literal[True]
+    recommendation_id: int | None = Field(default=None, gt=0)
 
 
 class CreateRequirementDraftTool(AgentTool):
@@ -356,3 +365,95 @@ class UpdateRequirementDraftTool(AgentTool):
             message=f"采购草稿 {detail.requirement_no} 已更新。",
             data=_detail_data(detail),
         )
+
+
+class SubmitRequirementTool(AgentTool):
+    name = "submit_requirement"
+    description = (
+        "把当前员工的完整采购草稿正式提交审批。仅当用户本轮明确要求确认提交时调用；"
+        "工具会先读取数据库最新详情和version，不要把草稿状态或版本作为参数。"
+    )
+    input_model = SubmitRequirementInput
+    is_write = True
+
+    def __init__(self, backend: RequirementBackendProtocol) -> None:
+        self._backend = backend
+
+    async def execute(
+        self,
+        context: AgentContext,
+        arguments: SubmitRequirementInput,
+    ) -> ToolExecutionResult:
+        if context.intent != IntentCategory.CONFIRM_SUBMISSION:
+            return ToolExecutionResult(
+                success=False,
+                code="EXPLICIT_CONFIRMATION_REQUIRED",
+                message="只有员工本轮明确确认提交审批时，才能执行正式提交。",
+            )
+
+        state = context.procurement_state
+        if state is None:
+            return ToolExecutionResult(
+                success=False,
+                code="NO_ACTIVE_REQUIREMENT",
+                message="当前会话没有可提交的采购草稿。",
+            )
+
+        current = await self._backend.get_detail(
+            state.requirement_id,
+            actor=context.actor,
+            request_id=context.request_id,
+        )
+        context.procurement_state = state_from_detail(
+            current,
+            scene=context.scene,
+            previous=state,
+        )
+        if current.status != "DRAFT":
+            return ToolExecutionResult(
+                success=False,
+                code="REQUIREMENT_NOT_SUBMITTABLE",
+                message=(
+                    f"采购需求 {current.requirement_no} 当前状态为 {current.status}，"
+                    "不能再次提交审批。"
+                ),
+                data=_detail_data(current),
+            )
+        if current.missing_fields or current.conflicts:
+            return ToolExecutionResult(
+                success=False,
+                code="REQUIREMENT_INCOMPLETE",
+                message="采购草稿仍有缺失字段或冲突，尚未执行正式提交。",
+                data=_detail_data(current),
+            )
+
+        result = await self._backend.submit(
+            current.requirement_id,
+            {
+                "version": current.version,
+                "confirmed": arguments.confirmed,
+                "recommendation_id": arguments.recommendation_id,
+            },
+            actor=context.actor,
+            request_id=context.request_id,
+            idempotency_key=f"submit-{current.requirement_id}-v{current.version}",
+        )
+        self._apply_submission(context, result)
+        return ToolExecutionResult(
+            success=True,
+            message=f"采购申请 {result.requirement_no} 已正式提交审批。",
+            data=result.model_dump(mode="json"),
+        )
+
+    @staticmethod
+    def _apply_submission(
+        context: AgentContext,
+        result: RequirementSubmissionResult,
+    ) -> None:
+        state = context.procurement_state
+        if state is None:
+            return
+        state.status = result.status
+        state.version = result.version
+        state.stage = AgentStage.SUBMITTED
+        state.pending_action = None

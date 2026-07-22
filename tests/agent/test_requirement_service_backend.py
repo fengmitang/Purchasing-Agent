@@ -18,6 +18,17 @@ def _detail() -> SimpleNamespace:
     return SimpleNamespace(model_dump=lambda **_: payload)
 
 
+def _submission() -> SimpleNamespace:
+    payload = {
+        "requirement_id": 7,
+        "requirement_no": "PR-7",
+        "status": "PENDING_APPROVAL",
+        "version": 2,
+        "submitted_at": "2026-07-22T08:00:00Z",
+    }
+    return SimpleNamespace(model_dump=lambda **_: payload)
+
+
 class StubRequirementService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object, object]] = []
@@ -34,6 +45,12 @@ class StubRequirementService:
         self.calls.append(("update", requirement_id, context))
         assert command.version == 1
         return _detail()
+
+    async def submit(self, requirement_id, command, context):
+        self.calls.append(("submit", requirement_id, context))
+        assert command.version == 1
+        assert command.confirmed is True
+        return _submission()
 
 
 @pytest.mark.asyncio
@@ -55,11 +72,20 @@ async def test_internal_backend_routes_writes_through_requirement_service() -> N
         request_id="req-2",
         idempotency_key="idem-2",
     )
+    submitted = await backend.submit(
+        7,
+        {"version": 1, "confirmed": True, "recommendation_id": None},
+        actor=actor,
+        request_id="req-3",
+        idempotency_key="idem-3",
+    )
 
     assert created.requirement_id == updated.requirement_id == 7
+    assert submitted.status == "PENDING_APPROVAL"
     assert service.calls[0][2].actor == actor
     assert service.calls[0][2].idempotency_key == "idem-1"
     assert service.calls[1][2].idempotency_key == "idem-2"
+    assert service.calls[2][2].idempotency_key == "idem-3"
 
 
 @pytest.mark.asyncio

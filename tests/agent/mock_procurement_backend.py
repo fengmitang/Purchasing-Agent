@@ -134,6 +134,44 @@ async def update_draft(
     return _envelope(draft, x_request_id)
 
 
+@app.post("/api/v1/purchase-requirements/{requirement_id}/submit")
+async def submit_requirement(
+    requirement_id: int,
+    payload: dict[str, Any],
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    draft = _drafts.get(requirement_id)
+    if draft is None:
+        return _error("RESOURCE_NOT_FOUND", "Draft not found", 404)
+    if not idempotency_key:
+        return _error("VALIDATION_ERROR", "Idempotency-Key is required", 422)
+    if payload.get("confirmed") is not True:
+        return _error("VALIDATION_ERROR", "Explicit confirmation is required", 422)
+    if payload.get("version") != draft["version"]:
+        return _error("VERSION_CONFLICT", "Draft version conflict", 409)
+    if draft["status"] != "DRAFT":
+        return _error("STATE_CONFLICT", "Only DRAFT can be submitted", 409)
+    missing = _missing(draft)
+    if missing:
+        return _error("REQUIREMENT_INCOMPLETE", "Draft is incomplete", 422)
+
+    draft["status"] = "PENDING_APPROVAL"
+    draft["version"] += 1
+    draft["submitted_at"] = _now()
+    draft["updated_at"] = draft["submitted_at"]
+    return {
+        "data": {
+            "requirement_id": draft["requirement_id"],
+            "requirement_no": draft["requirement_no"],
+            "status": draft["status"],
+            "version": draft["version"],
+            "submitted_at": draft["submitted_at"],
+        },
+        "meta": {"request_id": x_request_id},
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "draft_count": len(_drafts)}

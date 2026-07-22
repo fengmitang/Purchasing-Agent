@@ -1,6 +1,6 @@
 from typing import Any, Protocol
 
-from app.modules.agent.procurement.schemas import RequirementDetail
+from app.modules.agent.procurement.schemas import RequirementDetail, RequirementSubmissionResult
 from app.shared.identity import CurrentUser
 
 
@@ -31,3 +31,13 @@ class RequirementBackendProtocol(Protocol):
         request_id: str,
         idempotency_key: str,
     ) -> RequirementDetail: ...
+
+    async def submit(
+        self,
+        requirement_id: int,
+        payload: dict[str, Any],
+        *,
+        actor: CurrentUser,
+        request_id: str,
+        idempotency_key: str,
+    ) -> RequirementSubmissionResult: ...

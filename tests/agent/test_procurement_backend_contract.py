@@ -35,6 +35,14 @@ DETAIL = {
     "warnings": [],
 }
 
+SUBMISSION = {
+    "requirement_id": 501,
+    "requirement_no": "PR-20260721-0501",
+    "status": "PENDING_APPROVAL",
+    "version": 2,
+    "submitted_at": "2026-07-22T08:00:00Z",
+}
+
 
 class FakeResponse:
     def __init__(self, status_code=200, body=None, invalid_json=False):
@@ -130,6 +138,27 @@ class ProcurementBackendContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(7, kwargs["json"]["version"])
         self.assertEqual("Bearer user-token", kwargs["headers"]["Authorization"])
         self.assertEqual("draft-501-v7-hash", kwargs["headers"]["Idempotency-Key"])
+
+    async def test_submit_contract_requires_confirmation_and_new_idempotency_key(self):
+        FakeAsyncClient.response = FakeResponse(body={"data": SUBMISSION, "meta": {}})
+        client = ProcurementBackendClient("https://backend.test")
+
+        result = await client.submit(
+            501,
+            {"version": 1, "confirmed": True, "recommendation_id": None},
+            authorization="user-token",
+            request_id="request-submit",
+            idempotency_key="submit-501-v1",
+        )
+
+        method, path, kwargs = FakeAsyncClient.calls[0]
+        self.assertEqual(
+            ("POST", "/api/v1/purchase-requirements/501/submit"),
+            (method, path),
+        )
+        self.assertIs(True, kwargs["json"]["confirmed"])
+        self.assertEqual("submit-501-v1", kwargs["headers"]["Idempotency-Key"])
+        self.assertEqual("PENDING_APPROVAL", result.status)
 
     def test_patch_idempotency_key_is_deterministic(self):
         first = update_idempotency_key(501, 7, {"quantity": "2", "unit": "台"})

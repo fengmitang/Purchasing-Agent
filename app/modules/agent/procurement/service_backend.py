@@ -3,8 +3,15 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.modules.agent.procurement.backend_client import ProcurementBackendError
-from app.modules.agent.procurement.schemas import RequirementDetail
-from app.modules.requirement.schemas import CreateRequirementDraft, UpdateRequirementDraft
+from app.modules.agent.procurement.schemas import (
+    RequirementDetail,
+    RequirementSubmissionResult,
+)
+from app.modules.requirement.schemas import (
+    CreateRequirementDraft,
+    SubmitRequirement,
+    UpdateRequirementDraft,
+)
 from app.modules.requirement.service import RequirementService
 from app.shared.errors import DomainError
 from app.shared.identity import AuditContext, CurrentUser
@@ -81,6 +88,33 @@ class RequirementServiceBackend:
         except DomainError as exc:
             raise self._backend_error(exc) from exc
         return RequirementDetail.model_validate(detail.model_dump(mode="json"))
+
+    async def submit(
+        self,
+        requirement_id: int,
+        payload: dict[str, Any],
+        *,
+        actor: CurrentUser,
+        request_id: str,
+        idempotency_key: str,
+    ) -> RequirementSubmissionResult:
+        try:
+            command = SubmitRequirement.model_validate(payload)
+        except ValidationError as exc:
+            raise self._validation_error(exc) from exc
+        try:
+            result = await self._service.submit(
+                requirement_id,
+                command,
+                AuditContext(
+                    actor=actor,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                ),
+            )
+        except DomainError as exc:
+            raise self._backend_error(exc) from exc
+        return RequirementSubmissionResult.model_validate(result.model_dump(mode="json"))
 
     @staticmethod
     def _backend_error(exc: DomainError) -> ProcurementBackendError:
