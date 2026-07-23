@@ -104,6 +104,7 @@ def create_agent_runtime(
 
     backend = RequirementServiceBackend(RequirementService(session_factory))
     skill_manager = SkillManager(str(Path.cwd() / "skills"))
+    skill_manager.load()
     agent_service = build_procurement_agent_service(
         backend,
         model,
