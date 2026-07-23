@@ -549,24 +549,24 @@ Agent抽取：
 | submitted_at | DATETIME(6) | 否 | 当前版本提交审批时间 |
 | revision_no | INT | 是 | 版本号，默认 1 |
 | previous_requirement_id | BIGINT UNSIGNED | 否 | 上一版本申请外键 |
-| building_id | BIGINT UNSIGNED | 否 | 所属楼宇外键；草稿可空，提交审批前必填 |
+| building_id | BIGINT UNSIGNED | 否 | 所属楼宇外键；由系统根据登录账号的唯一有效楼宇自动写入 |
 | category_id | BIGINT UNSIGNED | 否 | 产品分类外键 |
-| category_name | VARCHAR(100) | 否 | 申请时分类名称快照；新申请只能选择八个规定类别之一 |
-| application_reason | TEXT | 否 | 采购原因 |
-| application_location | VARCHAR(200) | 否 | 申请地点 |
-| device_type | VARCHAR(100) | 否 | 设备类型 |
+| category_name | VARCHAR(100) | 否 | 兼容历史数据的分类名称快照；新建申请无需填写 |
+| application_reason | TEXT | 否 | 采购原因；提交审批前必填 |
+| application_location | VARCHAR(200) | 否 | 申请地点；提交审批前必填 |
+| device_type | VARCHAR(100) | 否 | 设备类型；选填 |
 | product_id | BIGINT UNSIGNED | 否 | 白名单产品外键 |
 | product_name | VARCHAR(200) | 否 | 设备名称；草稿可空，提交审批前必填 |
-| product_full_name | VARCHAR(500) | 否 | 具体设备全称 |
-| brand | VARCHAR(100) | 否 | 品牌 |
-| model | VARCHAR(200) | 否 | 设备型号 |
-| specification | TEXT | 否 | 规格参数 |
-| quantity | DECIMAL(18,4) | 否 | 可计算的采购数量；新申请只允许大于 0 的整数，保留小数位兼容历史导入 |
+| product_full_name | VARCHAR(500) | 否 | 具体设备全称；选填 |
+| brand | VARCHAR(100) | 否 | 品牌；选填 |
+| model | VARCHAR(200) | 否 | 设备型号；选填 |
+| specification | TEXT | 否 | 规格参数；选填 |
+| quantity | DECIMAL(18,4) | 否 | 提交审批前必填；新申请只允许大于 0 的整数，保留小数位兼容历史导入 |
 | quantity_raw | VARCHAR(100) | 否 | 无法直接数值化的原始数量 |
 | unit | VARCHAR(20) | 否 | 单位 |
 | supplier_id | BIGINT UNSIGNED | 否 | 供应商外键 |
-| supplier_name | VARCHAR(200) | 否 | 申请时供应商名称快照；草稿可空，提交审批前必填 |
-| unit_price | DECIMAL(18,2) | 否 | 单价 |
+| supplier_name | VARCHAR(200) | 否 | 申请时供应商名称快照；选填 |
+| unit_price | DECIMAL(18,2) | 否 | 参考单价；选填 |
 | unit_price_raw | VARCHAR(100) | 否 | 无法直接数值化的原始价格 |
 | total_amount | DECIMAL(18,2) | 否 | 总价 |
 | currency | VARCHAR(3) | 是 | 币种，默认 `CNY` |

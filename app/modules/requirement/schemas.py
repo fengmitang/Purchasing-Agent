@@ -43,7 +43,8 @@ class RequirementDraftFields(BaseModel):
 
     session_id: str | None = Field(default=None, max_length=100, description="来源 Agent 会话编号")
     building_id: PositiveId | None = Field(
-        default=None, description="设备所属楼宇数据库 ID；保存草稿时可空，提交时必填"
+        default=None,
+        description="兼容字段；系统根据当前登录账号自动写入所属楼宇，忽略客户端传值",
     )
     category_id: PositiveId | None = Field(
         default=None, description="已匹配到的产品分类数据库 ID；不知道时留空"
@@ -60,7 +61,7 @@ class RequirementDraftFields(BaseModel):
             "其他",
         ]
         | None
-    ) = Field(default=None, description="申请类别，只能从系统规定的八个类别中选择")
+    ) = Field(default=None, description="兼容字段；新建申请表单无需填写，客户端传值会被忽略")
     application_reason: str | None = Field(
         default=None, max_length=5000, description="员工申请采购的原因和用途"
     )

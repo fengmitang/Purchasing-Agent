@@ -2,9 +2,10 @@ import { ApartmentOutlined, AuditOutlined, CheckCircleOutlined, FileAddOutlined,
 import { Alert, App as AntApp, Badge, Button, Card, Col, Descriptions, Drawer, Empty, Flex, Form, Input, InputNumber, Layout, Menu, Progress, Row, Select, Space, Spin, Statistic, Steps, Table, Tag, Typography } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApprovalPage } from "./ApprovalPage";
+import { AgentChatPage } from "./AgentChatPage";
 import { api } from "./api";
 import { ProcurementPage } from "./ProcurementPage";
-import type { BuildingOption, CurrentUser, Recommendation, RequirementDetail, RequirementFormValues, RequirementStatus, RequirementSummary } from "./types";
+import type { CurrentUser, Recommendation, RequirementDetail, RequirementFormValues, RequirementStatus, RequirementSummary } from "./types";
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -16,15 +17,13 @@ const statusMap: Record<string, { text: string; color: string }> = {
   COMPLETED: { text: "已完成", color: "green" }, CANCELLED: { text: "已取消", color: "default" },
 };
 const fieldNames: Record<string, string> = {
-  building_id: "所属楼宇", category_name: "申请类别", application_reason: "申请原因", application_location: "申请地点",
+  application_reason: "申请原因", application_location: "申请地点",
   device_type: "设备类型", product_name: "设备名称", product_full_name: "具体设备全称",
   brand: "品牌", model: "设备型号", specification: "规格参数", quantity: "数量",
   unit: "单位", supplier_name: "供应商", unit_price: "单价",
 };
 const submissionRequiredFields: Array<keyof RequirementFormValues> = [
-  "building_id", "category_name", "application_reason", "application_location", "device_type",
-  "product_name", "product_full_name", "brand", "model", "specification", "quantity", "unit",
-  "supplier_name", "unit_price", "currency",
+  "application_reason", "application_location", "product_name", "quantity",
 ];
 function statusTag(status: RequirementStatus) {
   const item = statusMap[status] ?? { text: status, color: "default" };
@@ -40,8 +39,8 @@ function dateTime(value: string | null) {
 }
 function detailToForm(detail: RequirementDetail): RequirementFormValues {
   return {
-    building_id: detail.building_id ?? undefined, category_name: detail.category_name ?? undefined, application_reason: detail.application_reason ?? undefined,
-    application_location: detail.application_location ?? undefined, device_type: detail.device_type ?? undefined,
+    application_reason: detail.application_reason ?? undefined, application_location: detail.application_location ?? undefined,
+    device_type: detail.device_type ?? undefined,
     product_name: detail.product_name ?? undefined, product_full_name: detail.product_full_name ?? undefined,
     brand: detail.brand ?? undefined, model: detail.model ?? undefined, specification: detail.specification ?? undefined,
     quantity: detail.quantity == null ? undefined : Number(detail.quantity), unit: detail.unit ?? undefined,
@@ -54,7 +53,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
   const { message, modal } = AntApp.useApp();
   const [form] = Form.useForm<RequirementFormValues>();
   const employeeCode = user.employee_no;
-  const [activeMenu, setActiveMenu] = useState("new");
+  const [activeMenu, setActiveMenu] = useState("agent");
   const [current, setCurrent] = useState<RequirementDetail | null>(null);
   const [list, setList] = useState<RequirementSummary[]>([]);
   const [listTotal, setListTotal] = useState(0);
@@ -62,7 +61,6 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
   const [listLoading, setListLoading] = useState(false);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [recommendationOpen, setRecommendationOpen] = useState(false);
-  const [buildings, setBuildings] = useState<BuildingOption[]>([]);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const values = Form.useWatch([], form);
   const total = useMemo(() => Number(values?.quantity || 0) * Number(values?.unit_price || 0), [values?.quantity, values?.unit_price]);
@@ -74,7 +72,6 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
     } catch (error) { message.error((error as Error).message); } finally { setListLoading(false); }
   }, [employeeCode, message]);
   useEffect(() => { void refreshList(); }, [refreshList]);
-  useEffect(() => { api.listBuildings().then(setBuildings).catch(error => message.error((error as Error).message)); }, [message]);
   const refreshPendingApprovalCount = useCallback(async () => {
     if (!user.roles.includes("BUILDING_MANAGER")) return;
     try {
@@ -167,7 +164,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
   }
 
   const editable = !current || current.status === "DRAFT";
-  const completion = current ? Math.max(0, Math.round(((Object.keys(fieldNames).length - current.missing_fields.length) / Object.keys(fieldNames).length) * 100)) : 0;
+  const completion = current ? Math.max(0, Math.round(((submissionRequiredFields.length - current.missing_fields.length) / submissionRequiredFields.length) * 100)) : 0;
   const columns = [
     { title: "申请单号", dataIndex: "requirement_no", render: (text: string, record: RequirementSummary) => <Button type="link" className="table-link" onClick={() => void openRequirement(record.requirement_id)}>{text}</Button> },
     { title: "采购设备", dataIndex: "product_name", render: (value: string | null) => value || "未填写" },
@@ -176,6 +173,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
     { title: "最后更新", dataIndex: "updated_at", render: dateTime },
   ];
   const menuItems = [
+    { key: "agent", icon: <RobotOutlined />, label: "智能采购助手" },
     { key: "new", icon: <FileAddOutlined />, label: "新建采购申请" },
     { key: "mine", icon: <InboxOutlined />, label: "我的采购申请" },
     ...(user.roles.includes("BUILDING_MANAGER") ? [{ key: "approvals", icon: <AuditOutlined />, label: <span className="menu-label-with-badge"><span>待我审批</span><Badge count={pendingApprovalCount} overflowCount={99} /></span> }] : []),
@@ -186,12 +184,12 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
     <Sider width={244} className="sidebar" breakpoint="lg" collapsedWidth="0">
       <div className="brand"><div className="brand-mark"><ApartmentOutlined /></div><div><strong>采购智管</strong><span>数据中心采购平台</span></div></div>
       <Menu mode="inline" selectedKeys={[activeMenu]} onClick={({ key }) => { setActiveMenu(key); if (key === "new") startNew(); if (key === "mine") void refreshList(); }} items={menuItems} />
-      <div className="sidebar-note"><RobotOutlined /><div><b>Agent 辅助</b><span>后续可通过对话自动填写同一张表单，提交前仍由你确认。</span></div></div>
+      <div className="sidebar-note"><RobotOutlined /><div><b>Agent 辅助</b><span>通过自然语言自动填写采购草稿，提交前仍由你确认。</span></div></div>
     </Sider>
     <Layout>
       <Header className="topbar"><div><Text type="secondary">当前员工</Text><strong>{user.name}（{employeeCode}）</strong><Space size={4}>{user.roles.map(role => <Tag key={role}>{role === "EMPLOYEE" ? "员工" : role === "BUILDING_MANAGER" ? "楼长" : role === "PURCHASER" ? "采购员" : "管理员"}</Tag>)}</Space></div><Button icon={<LogoutOutlined />} onClick={() => void onLogout()}>退出登录</Button></Header>
       <Content className="main-content">
-        {activeMenu === "approvals" ? <ApprovalPage onPendingCountChange={setPendingApprovalCount} /> : activeMenu === "procurement" ? <ProcurementPage /> : activeMenu === "mine" ? <section>
+        {activeMenu === "agent" ? <AgentChatPage user={user} onOpenRequirement={(id) => void openRequirement(id)} onSubmitted={() => { void refreshList(); void refreshPendingApprovalCount(); }} /> : activeMenu === "approvals" ? <ApprovalPage onPendingCountChange={setPendingApprovalCount} /> : activeMenu === "procurement" ? <ProcurementPage /> : activeMenu === "mine" ? <section>
           <div className="page-heading"><div><Title level={2}>我的采购申请</Title><Text type="secondary">查看草稿与已提交申请的当前进度</Text></div><Button type="primary" icon={<FileAddOutlined />} onClick={startNew}>新建申请</Button></div>
           <Card className="surface-card" bordered={false}><Table rowKey="requirement_id" loading={listLoading} columns={columns} dataSource={list} pagination={{ total: listTotal, pageSize: 20, hideOnSinglePage: true }} scroll={{ x: 760 }} /></Card>
         </section> : <Spin spinning={loading}><section>
@@ -202,19 +200,17 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
           {current?.missing_fields.length ? <Alert className="missing-alert" type="warning" showIcon message="草稿还不能提交审批" description={`请补充：${current.missing_fields.map((field) => fieldNames[field] || field).join("、")}，然后先保存修改。`} /> : current?.status === "DRAFT" ? <Alert className="missing-alert" type="success" showIcon message="信息已完整，可以核对后提交审批" /> : null}
           <Form form={form} layout="vertical" initialValues={{ currency: "CNY", unit: "台" }} disabled={!editable} onValuesChange={(changed) => form.setFields((Object.keys(changed) as Array<keyof RequirementFormValues>).map(name => ({ name, errors: [] })))}>
             <Card className="surface-card form-section" bordered={false} title={<><span className="step-number">1</span>申请信息</>}><Row gutter={20}>
-              <Col xs={24} md={6}><Form.Item name="building_id" label="所属楼宇" required><Select placeholder="请选择审批楼宇" options={buildings.map(item => ({ value: item.building_id, label: item.building_name }))} /></Form.Item></Col>
-              <Col xs={24} md={6}><Form.Item name="category_name" label="申请类别" required><Select placeholder="请选择申请类别" options={["电气","暖通","弱电","机房环境","工器具","算力服务器","IDC网络","其他"].map(value => ({ value, label: value }))} /></Form.Item></Col>
-              <Col xs={24} md={6}><Form.Item name="application_location" label="具体申请地点" required><Input placeholder="例如：3楼 A03 机房" /></Form.Item></Col>
-              <Col xs={24} md={6}><Form.Item name="device_type" label="设备类型" required><Input placeholder="例如：服务器、交换机、UPS" /></Form.Item></Col>
+              <Col xs={24} md={12}><Form.Item name="application_location" label="具体申请地点" required><Input placeholder="例如：3楼 A03 机房" /></Form.Item></Col>
+              <Col xs={24} md={12}><Form.Item name="device_type" label="设备类型"><Input placeholder="例如：服务器、交换机、UPS" /></Form.Item></Col>
               <Col span={24}><Form.Item name="application_reason" label="申请原因" required><Input.TextArea rows={3} maxLength={5000} showCount placeholder="请说明采购用途、业务背景及必要性" /></Form.Item></Col>
             </Row></Card>
             <Card className="surface-card form-section" bordered={false} title={<><span className="step-number">2</span>设备信息</>}><Row gutter={20}>
-              <Col xs={24} md={8}><Form.Item name="product_name" label="设备名称" required><Input placeholder="例如：机架式服务器" /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="brand" label="品牌" required><Input placeholder="例如：浪潮" /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="model" label="设备型号" required><Input placeholder="请输入完整型号" /></Form.Item></Col>
-              <Col span={24}><Form.Item name="product_full_name" label="具体设备全称" required><Input placeholder="例如：浪潮 2U 双路机架式服务器" /></Form.Item></Col><Col span={24}><Form.Item name="specification" label="规格参数" required><Input.TextArea rows={3} maxLength={5000} showCount placeholder="填写配置、尺寸、性能要求及其他技术参数" /></Form.Item></Col>
+              <Col xs={24} md={8}><Form.Item name="product_name" label="设备名称" required><Input placeholder="例如：机架式服务器" /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="brand" label="品牌"><Input placeholder="例如：浪潮" /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="model" label="设备型号"><Input placeholder="请输入完整型号" /></Form.Item></Col>
+              <Col span={24}><Form.Item name="product_full_name" label="具体设备全称"><Input placeholder="例如：浪潮 2U 双路机架式服务器" /></Form.Item></Col><Col span={24}><Form.Item name="specification" label="规格参数"><Input.TextArea rows={3} maxLength={5000} showCount placeholder="填写配置、尺寸、性能要求及其他技术参数" /></Form.Item></Col>
             </Row></Card>
             <Card className="surface-card form-section" bordered={false} title={<><span className="step-number">3</span>数量与供应商</>}><Row gutter={20}>
-              <Col xs={12} md={5}><Form.Item name="quantity" label="数量" required><InputNumber min={1} step={1} precision={0} className="full-width" placeholder="请输入整数" /></Form.Item></Col><Col xs={12} md={4}><Form.Item name="unit" label="单位" required><Input placeholder="例如：台、套、批" /></Form.Item></Col><Col xs={24} md={7}><Form.Item name="unit_price" label="参考单价" required><InputNumber min={0} precision={2} className="full-width" addonBefore="¥" /></Form.Item></Col>
-              <Col xs={24} md={8}><Form.Item label="预计总价"><div className="calculated-total">¥ {total.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span>系统自动计算</span></div></Form.Item></Col><Col xs={24} md={16}><Form.Item name="supplier_name" label="供应商" required extra="保存草稿时可以暂不填写；提交审批前必须填写。"><Input placeholder="可自行填写，也可先保存后查询历史供应商" /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="currency" label="币种" required><Select options={[{ value: "CNY", label: "人民币（CNY）" }]} /></Form.Item></Col>
+              <Col xs={12} md={5}><Form.Item name="quantity" label="数量" required><InputNumber min={1} step={1} precision={0} className="full-width" placeholder="请输入整数" /></Form.Item></Col><Col xs={12} md={4}><Form.Item name="unit" label="单位"><Input placeholder="例如：台、套、批" /></Form.Item></Col><Col xs={24} md={7}><Form.Item name="unit_price" label="参考单价"><InputNumber min={0} precision={2} className="full-width" addonBefore="¥" /></Form.Item></Col>
+              <Col xs={24} md={8}><Form.Item label="预计总价"><div className="calculated-total">¥ {total.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span>系统自动计算</span></div></Form.Item></Col><Col xs={24} md={16}><Form.Item name="supplier_name" label="供应商"><Input placeholder="可自行填写，也可先保存后查询历史供应商" /></Form.Item></Col><Col xs={24} md={8}><Form.Item name="currency" label="币种"><Select options={[{ value: "CNY", label: "人民币（CNY）" }]} /></Form.Item></Col>
             </Row>
               <div className="history-guide">
                 <Steps size="small" current={current ? 1 : 0} items={[

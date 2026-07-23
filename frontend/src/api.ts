@@ -1,4 +1,4 @@
-import type { ApprovalTask, BuildingOption, CurrentUser, ProcurementTask, RecommendationResult, RequirementDetail, RequirementFormValues, RequirementSummary } from "./types";
+import type { AgentChatMessage, AgentMessageResult, ApprovalTask, BuildingOption, CurrentUser, ProcurementTask, RecommendationResult, RequirementDetail, RequirementFormValues, RequirementSummary } from "./types";
 
 interface SuccessResponse<T> { data: T; meta: { request_id: string }; }
 interface PageResponse<T> extends SuccessResponse<T[]> { page: { number: number; size: number; total: number }; }
@@ -45,8 +45,7 @@ async function request<T>(path: string, options: RequestInit = {}, isWrite = fal
 
 function draftPayload(values: RequirementFormValues) {
   return {
-    session_id: null, building_id: values.building_id || null, category_id: null, category_name: values.category_name || null,
-    application_reason: values.application_reason || null,
+    session_id: null, application_reason: values.application_reason || null,
     application_location: values.application_location || null,
     device_type: values.device_type || null, product_id: null,
     product_name: values.product_name || null, product_full_name: values.product_full_name || null,
@@ -158,5 +157,27 @@ export const api = {
         specification: current.specification, application_location: current.application_location, limit: 5,
       }),
     })).data;
+  },
+  async sendAgentMessage(conversationId: string, content: string) {
+    return (await request<SuccessResponse<AgentMessageResult>>("/api/v1/agent/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        client_message_id: operationKey(),
+        content,
+      }),
+    }, true)).data;
+  },
+  async listAgentMessages(conversationId: string, page = 1, pageSize = 100) {
+    return request<PageResponse<AgentChatMessage>>(
+      `/api/v1/agent/conversations/${conversationId}/messages?page=${page}&page_size=${pageSize}`,
+    );
+  },
+  async resetAgentConversation(conversationId: string) {
+    await request<SuccessResponse<{ conversation_id: string; cleared: boolean }>>(
+      `/api/v1/agent/conversations/${conversationId}`,
+      { method: "DELETE" },
+      true,
+    );
   },
 };

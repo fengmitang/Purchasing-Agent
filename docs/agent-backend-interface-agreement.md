@@ -124,34 +124,35 @@ Agent 端不得：
 ### 5.1 `RequirementDraftInput`
 
 创建草稿时可以只传已经识别出的字段；修改草稿时只传发生变化的字段。
+`building_id` 不由 Agent 或前端传入，后端根据当前登录账号关联的唯一有效楼宇自动写入。
 
 | 字段 | 类型 | 草稿 | 提交审批 | 说明 |
 | --- | --- | --- | --- | --- |
 | `session_id` | string/null | 可选 | 可选 | 来源 Agent 会话编号 |
 | `category_id` | integer/null | 可选 | 可选 | 匹配到的产品分类 ID |
-| `category_name` | string/null | 可选 | 必填 | 只能选择：电气、暖通、弱电、机房环境、工器具、算力服务器、IDC网络、其他 |
+| `category_name` | string/null | 可选 | 可选 | 兼容历史数据；新建申请无需填写 |
 | `application_reason` | string/null | 可选 | 必填 | 采购原因 |
 | `application_location` | string/null | 可选 | 必填 | 使用或申请地点 |
-| `device_type` | string/null | 可选 | 必填 | 设备类型 |
+| `device_type` | string/null | 可选 | 可选 | 设备类型 |
 | `product_id` | integer/null | 可选 | 可选 | 匹配到的白名单/产品主数据 ID |
 | `product_name` | string/null | 可选 | 必填 | 设备名称 |
-| `product_full_name` | string/null | 可选 | 必填 | 具体设备全称 |
-| `brand` | string/null | 可选 | 必填 | 品牌 |
-| `model` | string/null | 可选 | 必填 | 型号 |
-| `specification` | string/null | 可选 | 必填 | 规格参数 |
+| `product_full_name` | string/null | 可选 | 可选 | 具体设备全称 |
+| `brand` | string/null | 可选 | 可选 | 品牌 |
+| `model` | string/null | 可选 | 可选 | 型号 |
+| `specification` | string/null | 可选 | 可选 | 规格参数 |
 | `quantity` | integer string/null | 可选 | 必填 | 必须是大于 0 的整数 |
-| `unit` | string/null | 可选 | 必填 | 台、个、套等 |
+| `unit` | string/null | 可选 | 可选 | 台、个、套等 |
 | `supplier_id` | integer/null | 可选 | 可选 | 匹配到的正式供应商 ID |
-| `supplier_name` | string/null | 可选 | 必填 | 保存草稿时可空；提交审批前必须填写 |
-| `unit_price` | decimal string/null | 可选 | 必填 | 保存草稿时可空；提交审批前必须填写预算/参考单价，不等同采购报价 |
-| `currency` | string | 可选 | 必填 | 默认 `CNY` |
+| `supplier_name` | string/null | 可选 | 可选 | 供应商名称 |
+| `unit_price` | decimal string/null | 可选 | 可选 | 预算/参考单价，不等同采购报价 |
+| `currency` | string | 可选 | 可选 | 默认 `CNY` |
 
 规则：
 
 - 如果只有 `product_id`，后端仍应返回对应商品快照供员工确认；提交时后端以员工最终确认的快照为准。
 - 如果 `product_id` 为空，只要商品必填文本完整，允许提交并标记 `new_product = true`。
 - 如果 `supplier_id` 为空但填写了 `supplier_name`，允许保存和提交，并标记 `new_supplier = true`。
-- 如果员工尚未选择供应商，`supplier_id` 和 `supplier_name` 均可为空，不妨碍创建草稿；正式提交前必须填写 `supplier_name` 和 `unit_price`。
+- 如果员工尚未选择供应商或参考单价，相关字段可为空，不妨碍创建草稿或正式提交。
 - `total_amount` 不作为输入字段。`quantity` 和 `unit_price` 均存在时由后端计算，否则返回 `null`。
 
 ### 5.2 `RequirementDetail`

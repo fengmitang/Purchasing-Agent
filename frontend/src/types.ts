@@ -7,7 +7,7 @@ export interface CurrentUser {
 
 export interface Applicant { employee_no: string | null; name: string; phone: string | null; }
 export interface RequirementFormValues {
-  building_id?: number; category_name?: string; application_reason?: string; application_location?: string;
+  application_reason?: string; application_location?: string;
   device_type?: string; product_name?: string; product_full_name?: string;
   brand?: string; model?: string; specification?: string; quantity?: number;
   unit?: string; supplier_name?: string; unit_price?: number; currency?: string;
@@ -74,4 +74,20 @@ export interface ProcurementTask {
   purchaser_name: string | null; purchaser_phone: string | null; purchasing_started_at: string | null;
   quoted_at: string | null; contracted_at: string | null; received_at: string | null;
   completed_at: string | null; updated_at: string;
+}
+
+export interface RequirementReference {
+  requirement_id: number; requirement_no: string; status: string;
+}
+
+export interface AgentChatMessage {
+  message_id: string; client_message_id?: string | null;
+  role: "USER" | "ASSISTANT"; content: string;
+  status: "PROCESSING" | "COMPLETED" | "FAILED"; created_at: string;
+}
+
+export interface AgentMessageResult {
+  message_id: string; conversation_id: string; role: "ASSISTANT";
+  content: string; intent: string; scene: string; stage: string;
+  active_requirement: RequirementReference | null; created_at: string;
 }

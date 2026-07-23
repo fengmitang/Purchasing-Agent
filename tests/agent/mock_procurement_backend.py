@@ -19,7 +19,6 @@ _next_id = 1000
 _required_fields = (
     "product_name",
     "quantity",
-    "unit",
     "application_reason",
     "application_location",
 )

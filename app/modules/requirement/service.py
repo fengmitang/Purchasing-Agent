@@ -39,9 +39,7 @@ from app.shared.identity import AuditContext, CurrentUser
 
 _EDITABLE_FIELDS = {
     "session_id",
-    "building_id",
     "category_id",
-    "category_name",
     "application_reason",
     "application_location",
     "device_type",
@@ -59,20 +57,10 @@ _EDITABLE_FIELDS = {
     "currency",
 }
 _REQUIRED_FOR_SUBMISSION = (
-    "building_id",
-    "category_name",
     "application_reason",
     "application_location",
-    "device_type",
     "product_name",
-    "product_full_name",
-    "brand",
-    "model",
-    "specification",
     "quantity",
-    "unit",
-    "supplier_name",
-    "unit_price",
 )
 
 
@@ -141,6 +129,7 @@ class RequirementService:
                 return replay
 
             employee = await self._require_employee(repository, context.actor)
+            building_id = self._automatic_building_id(context.actor)
             requirement = PurchaseRequirement(
                 requirement_no=self._number_factory(now_aware),
                 employee_id=employee.id,
@@ -158,9 +147,14 @@ class RequirementService:
                 updated_at=now,
                 version=1,
                 total_amount=None,
+                building_id=building_id,
                 **self._draft_values(command),
             )
-            await self._resolve_associations(repository, requirement, command.model_fields_set)
+            await self._resolve_associations(
+                repository,
+                requirement,
+                command.model_fields_set & _EDITABLE_FIELDS,
+            )
             requirement.total_amount = self._calculate_total(
                 requirement.quantity, requirement.unit_price
             )
@@ -381,6 +375,7 @@ class RequirementService:
             requirement = await repository.get_requirement_for_update(requirement_id)
             self._require_owned(requirement, employee)
             self._require_draft_version(requirement, command.version)
+            requirement.building_id = self._automatic_building_id(context.actor)
             missing_fields = self._missing_fields(requirement)
             if missing_fields:
                 raise DomainError(
@@ -861,6 +856,25 @@ class RequirementService:
             if getattr(requirement, field) is None
             or (isinstance(getattr(requirement, field), str) and not getattr(requirement, field))
         ]
+
+    @staticmethod
+    def _automatic_building_id(actor: CurrentUser) -> int:
+        if len(actor.building_ids) != 1:
+            raise DomainError(
+                ErrorCode.EMPLOYEE_NOT_MAPPED,
+                "当前登录账号未配置唯一所属楼宇，请联系系统管理员维护账号楼宇信息",
+                [
+                    {
+                        "field": "current_user.building_ids",
+                        "reason": (
+                            "building_not_mapped"
+                            if not actor.building_ids
+                            else "multiple_buildings_mapped"
+                        ),
+                    }
+                ],
+            )
+        return next(iter(actor.building_ids))
 
     def _to_detail(
         self,

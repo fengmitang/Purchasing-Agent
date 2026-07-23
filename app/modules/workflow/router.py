@@ -37,8 +37,8 @@ def _context(request: Request, actor: CurrentUser, key: str) -> AuditContext:
 @building_router.get(
     "",
     response_model=SuccessResponse[list[BuildingOption]],
-    summary="查询可选择的楼宇",
-    description="员工创建采购申请时使用。提交审批前必须选择所属楼宇，系统据此路由给对应楼长。",
+    summary="查询有效楼宇",
+    description="返回有效楼宇主数据。采购申请的所属楼宇由系统根据当前登录账号自动写入，不由员工选择。",
 )
 async def list_buildings(
     request: Request,

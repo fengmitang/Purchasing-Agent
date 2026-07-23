@@ -24,6 +24,7 @@ from app.shared.errors import DomainError, ErrorCode
 from app.shared.identity import AuditContext, CurrentUser
 
 pytestmark = pytest.mark.integration
+_test_building_id: int | None = None
 
 
 def require_test_database_url() -> str:
@@ -73,10 +74,12 @@ async def clean_api_records(connection) -> None:
     )
     await connection.execute(text("DELETE FROM supplier WHERE supplier_name = 'API历史供应商'"))
     await connection.execute(text("DELETE FROM product_category WHERE name = 'API测试分类'"))
+    await connection.execute(text("DELETE FROM building WHERE building_code = 'API-BUILDING'"))
 
 
 @pytest_asyncio.fixture
 async def service() -> AsyncIterator[RequirementService]:
+    global _test_building_id
     database_url = require_test_database_url()
     os.environ["DATABASE_URL"] = database_url
     await asyncio.to_thread(command.upgrade, Config("alembic.ini"), "head")
@@ -91,6 +94,13 @@ async def service() -> AsyncIterator[RequirementService]:
                 "('API-HIST', '历史测试员工', '13900000003', 'EMPLOYEE', 'ACTIVE')"
             )
         )
+        building_result = await connection.execute(
+            text(
+                "INSERT INTO building (building_code, building_name, status, version) "
+                "VALUES ('API-BUILDING', '接口测试楼宇', 'ACTIVE', 1)"
+            )
+        )
+        _test_building_id = int(building_result.lastrowid)
         category_result = await connection.execute(
             text("INSERT INTO product_category (name) VALUES ('API测试分类')")
         )
@@ -161,12 +171,17 @@ async def service() -> AsyncIterator[RequirementService]:
 
     async with engine.begin() as connection:
         await clean_api_records(connection)
+    _test_building_id = None
     await engine.dispose()
 
 
 def context(employee_no: str, key: str) -> AuditContext:
+    assert _test_building_id is not None
     return AuditContext(
-        actor=CurrentUser(user_code=employee_no),
+        actor=CurrentUser(
+            user_code=employee_no,
+            building_ids=frozenset({_test_building_id}),
+        ),
         request_id=f"request-{key}",
         idempotency_key=key,
     )
@@ -298,22 +313,14 @@ async def test_confirmed_complete_draft_is_submitted_idempotently(
 ) -> None:
     created = await service.create_draft(
         CreateRequirementDraft(
-            category_name="算力服务器",
             application_reason="测试环境扩容",
             application_location="A区数据中心",
-            device_type="服务器",
             product_name="机架式服务器",
-            product_full_name="测试用双路机架式服务器",
-            brand="测试品牌",
-            model="TEST-SRV-2U",
-            specification="2U 双路机架式配置",
             quantity="2",
-            unit="台",
-            supplier_name="测试供应商有限公司",
-            unit_price="35000.00",
         ),
         context("API-E001", "submit-create"),
     )
+    assert created.building_id == _test_building_id
     command_payload = SubmitRequirement(version=created.version, confirmed=True)
 
     submitted = await service.submit(
@@ -336,8 +343,7 @@ async def test_confirmed_complete_draft_is_submitted_idempotently(
     assert submitted.version == 2
     assert submitted.submitted_at == datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
     assert detail.status == "PENDING_APPROVAL"
-    assert detail.total_amount is not None
-    assert format(detail.total_amount, ".2f") == "70000.00"
+    assert detail.total_amount is None
 
     with pytest.raises(DomainError) as conflict:
         await service.update_draft(

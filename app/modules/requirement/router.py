@@ -49,7 +49,8 @@ def _audit_context(
         "这是人工填表和 Agent 对话共用的创建入口。没有 Agent 时，员工可以一次填写完整表单；"
         "使用 Agent 时，也可以先提交已识别的部分字段，系统通过 `missing_fields` 告知还缺什么，"
         "随后再调用修改草稿接口逐步补齐。`session_id` 只用于关联 Agent 会话，人工填表时留空。"
-        "申请人姓名、电话从当前登录员工自动取得，申请时间由系统记录，总价由数量乘单价自动计算，"
+        "申请人姓名、电话和所属楼宇从当前登录员工自动取得，申请时间由系统记录，"
+        "总价由数量乘单价自动计算，"
         "这些字段不能由用户伪造。需要填写 `X-User-Code` 和唯一的 `Idempotency-Key`。"
         "此接口只保存草稿，不会自动提交审批。"
     ),
@@ -156,7 +157,8 @@ async def update_requirement_draft(
     response_model=SuccessResponse[RequirementSubmissionResult],
     summary="员工确认并提交审批",
     description=(
-        "员工核对完整采购单并明确确认后调用。`confirmed` 必须为 true，信息不完整时后端会拒绝提交。"
+        "员工核对采购单并明确确认后调用。`confirmed` 必须为 true；申请原因、具体申请地点、"
+        "设备名称和数量缺失时后端会拒绝提交，其他采购字段均可留空。"
         "成功后状态变为 PENDING_APPROVAL（待审批），并记录提交时间和状态历史。"
     ),
 )
