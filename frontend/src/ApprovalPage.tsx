@@ -13,14 +13,14 @@ function approvalTag(task: ApprovalTask) {
   return <Tag color="blue">待审批</Tag>;
 }
 
-export function ApprovalPage() {
+export function ApprovalPage({ onPendingCountChange }: { onPendingCountChange?: (count: number) => void }) {
   const { message, modal } = App.useApp();
   const [tasks, setTasks] = useState<ApprovalTask[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ApprovalTask | null>(null);
   const [view, setView] = useState<"pending" | "history">("pending");
-  const load = useCallback(async () => { setLoading(true); try { const result = await api.listApprovalTasks(view); setTasks(result.data); setTotal(result.page.total); } catch (error) { message.error((error as Error).message); } finally { setLoading(false); } }, [message, view]);
+  const load = useCallback(async () => { setLoading(true); try { const result = await api.listApprovalTasks(view); setTasks(result.data); setTotal(result.page.total); if (view === "pending") onPendingCountChange?.(result.page.total); } catch (error) { message.error((error as Error).message); } finally { setLoading(false); } }, [message, onPendingCountChange, view]);
   useEffect(() => { void load(); }, [load]);
 
   async function approve() {

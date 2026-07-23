@@ -58,7 +58,6 @@ _EDITABLE_FIELDS = {
     "unit_price",
     "currency",
 }
-_BUSINESS_FIELDS = _EDITABLE_FIELDS - {"session_id", "currency"}
 _REQUIRED_FOR_SUBMISSION = (
     "building_id",
     "category_name",
@@ -124,18 +123,6 @@ class RequirementService:
         context: AuditContext,
     ) -> RequirementDetail:
         """保存不完整草稿，但不提交审批。"""
-        supplied_business_values = {
-            field: getattr(command, field)
-            for field in _BUSINESS_FIELDS
-            if field in command.model_fields_set
-        }
-        if not any(_clean_text(value) is not None for value in supplied_business_values.values()):
-            raise DomainError(
-                ErrorCode.VALIDATION_ERROR,
-                "请至少填写一项采购申请内容",
-                [{"field": "body", "reason": "missing_business_field"}],
-            )
-
         payload = command.model_dump(mode="json", exclude_unset=True)
         request_hash = _request_hash(payload)
         now_aware = self._clock()

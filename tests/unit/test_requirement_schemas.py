@@ -31,6 +31,20 @@ def test_category_must_be_selected_from_the_business_list() -> None:
         CreateRequirementDraft(category_name="随意填写的类别")
 
 
+def test_draft_schema_accepts_explicit_null_optional_numbers() -> None:
+    command = CreateRequirementDraft(
+        building_id=None,
+        category_id=None,
+        product_id=None,
+        supplier_id=None,
+        quantity=None,
+        unit_price=None,
+    )
+
+    assert command.building_id is None
+    assert command.quantity is None
+
+
 def test_manual_create_schema_exposes_the_complete_editable_form() -> None:
     schema = CreateRequirementDraft.model_json_schema()
 
