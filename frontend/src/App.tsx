@@ -1,5 +1,5 @@
 import { ApartmentOutlined, AuditOutlined, CheckCircleOutlined, FileAddOutlined, HistoryOutlined, InboxOutlined, LockOutlined, LogoutOutlined, RobotOutlined, SaveOutlined, SearchOutlined, ShoppingCartOutlined, UserOutlined } from "@ant-design/icons";
-import { Alert, App as AntApp, Button, Card, Col, Descriptions, Drawer, Empty, Flex, Form, Input, InputNumber, Layout, Menu, Progress, Row, Select, Space, Spin, Statistic, Steps, Table, Tag, Typography } from "antd";
+import { Alert, App as AntApp, Badge, Button, Card, Col, Descriptions, Drawer, Empty, Flex, Form, Input, InputNumber, Layout, Menu, Progress, Row, Select, Space, Spin, Statistic, Steps, Table, Tag, Typography } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApprovalPage } from "./ApprovalPage";
 import { api } from "./api";
@@ -63,6 +63,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [recommendationOpen, setRecommendationOpen] = useState(false);
   const [buildings, setBuildings] = useState<BuildingOption[]>([]);
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const values = Form.useWatch([], form);
   const total = useMemo(() => Number(values?.quantity || 0) * Number(values?.unit_price || 0), [values?.quantity, values?.unit_price]);
 
@@ -74,6 +75,21 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
   }, [employeeCode, message]);
   useEffect(() => { void refreshList(); }, [refreshList]);
   useEffect(() => { api.listBuildings().then(setBuildings).catch(error => message.error((error as Error).message)); }, [message]);
+  const refreshPendingApprovalCount = useCallback(async () => {
+    if (!user.roles.includes("BUILDING_MANAGER")) return;
+    try {
+      const result = await api.listApprovalTasks("pending", 1, 1);
+      setPendingApprovalCount(result.page.total);
+    } catch {
+      // The approval page will show request errors when the user opens it.
+    }
+  }, [user.roles]);
+  useEffect(() => {
+    if (!user.roles.includes("BUILDING_MANAGER")) return;
+    void refreshPendingApprovalCount();
+    const timer = window.setInterval(() => void refreshPendingApprovalCount(), 30_000);
+    return () => window.clearInterval(timer);
+  }, [refreshPendingApprovalCount, user.roles]);
 
   async function saveDraft() {
     const formValues = form.getFieldsValue();
@@ -131,7 +147,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
       setLoading(false);
     }
     modal.confirm({ title: "确认提交审批？", content: "提交后申请将进入楼长审批，当前草稿不能继续修改。", okText: "确认提交", cancelText: "继续检查",
-      async onOk() { try { await api.submit(employeeCode.trim(), latest); const detail = await api.getDetail(employeeCode.trim(), latest.requirement_id); setCurrent(detail); await refreshList(); message.success("已提交审批"); } catch (error) { message.error((error as Error).message); } },
+      async onOk() { try { await api.submit(employeeCode.trim(), latest); const detail = await api.getDetail(employeeCode.trim(), latest.requirement_id); setCurrent(detail); await refreshList(); await refreshPendingApprovalCount(); message.success("已提交审批"); } catch (error) { message.error((error as Error).message); } },
     });
   }
   function cancelDraft() {
@@ -162,7 +178,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
   const menuItems = [
     { key: "new", icon: <FileAddOutlined />, label: "新建采购申请" },
     { key: "mine", icon: <InboxOutlined />, label: "我的采购申请" },
-    ...(user.roles.includes("BUILDING_MANAGER") ? [{ key: "approvals", icon: <AuditOutlined />, label: "待我审批" }] : []),
+    ...(user.roles.includes("BUILDING_MANAGER") ? [{ key: "approvals", icon: <AuditOutlined />, label: <span className="menu-label-with-badge"><span>待我审批</span><Badge count={pendingApprovalCount} overflowCount={99} /></span> }] : []),
     ...(user.roles.includes("PURCHASER") ? [{ key: "procurement", icon: <ShoppingCartOutlined />, label: "采购任务" }] : []),
   ];
 
@@ -175,7 +191,7 @@ function AppContent({ user, onLogout }: { user: CurrentUser; onLogout: () => Pro
     <Layout>
       <Header className="topbar"><div><Text type="secondary">当前员工</Text><strong>{user.name}（{employeeCode}）</strong><Space size={4}>{user.roles.map(role => <Tag key={role}>{role === "EMPLOYEE" ? "员工" : role === "BUILDING_MANAGER" ? "楼长" : role === "PURCHASER" ? "采购员" : "管理员"}</Tag>)}</Space></div><Button icon={<LogoutOutlined />} onClick={() => void onLogout()}>退出登录</Button></Header>
       <Content className="main-content">
-        {activeMenu === "approvals" ? <ApprovalPage /> : activeMenu === "procurement" ? <ProcurementPage /> : activeMenu === "mine" ? <section>
+        {activeMenu === "approvals" ? <ApprovalPage onPendingCountChange={setPendingApprovalCount} /> : activeMenu === "procurement" ? <ProcurementPage /> : activeMenu === "mine" ? <section>
           <div className="page-heading"><div><Title level={2}>我的采购申请</Title><Text type="secondary">查看草稿与已提交申请的当前进度</Text></div><Button type="primary" icon={<FileAddOutlined />} onClick={startNew}>新建申请</Button></div>
           <Card className="surface-card" bordered={false}><Table rowKey="requirement_id" loading={listLoading} columns={columns} dataSource={list} pagination={{ total: listTotal, pageSize: 20, hideOnSinglePage: true }} scroll={{ x: 760 }} /></Card>
         </section> : <Spin spinning={loading}><section>

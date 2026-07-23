@@ -7,9 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, field_serializer
 
 
-def _decimal_string(value: Any) -> Decimal | None:
-    if value is None:
-        return None
+def _decimal_string(value: Any) -> Decimal:
     if not isinstance(value, str):
         raise ValueError("必须使用十进制数字符串")
     try:
@@ -18,23 +16,24 @@ def _decimal_string(value: Any) -> Decimal | None:
         raise ValueError("必须是有效的十进制数字符串") from None
 
 
-def _integer_quantity(value: Decimal | None) -> Decimal | None:
-    if value is not None and value != value.to_integral_value():
+def _integer_quantity(value: Decimal) -> Decimal:
+    if value != value.to_integral_value():
         raise ValueError("采购数量必须是整数")
     return value
 
 
 Quantity = Annotated[
-    Decimal | None,
+    Decimal,
     BeforeValidator(_decimal_string),
     AfterValidator(_integer_quantity),
     Field(gt=0, max_digits=18, decimal_places=4),
-]
+] | None
 Money = Annotated[
-    Decimal | None,
+    Decimal,
     BeforeValidator(_decimal_string),
     Field(ge=0, max_digits=18, decimal_places=2),
-]
+] | None
+PositiveId = Annotated[int, Field(gt=0)]
 
 
 class RequirementDraftFields(BaseModel):
@@ -43,11 +42,11 @@ class RequirementDraftFields(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     session_id: str | None = Field(default=None, max_length=100, description="来源 Agent 会话编号")
-    building_id: int | None = Field(
-        default=None, gt=0, description="设备所属楼宇数据库 ID；保存草稿时可空，提交时必填"
+    building_id: PositiveId | None = Field(
+        default=None, description="设备所属楼宇数据库 ID；保存草稿时可空，提交时必填"
     )
-    category_id: int | None = Field(
-        default=None, gt=0, description="已匹配到的产品分类数据库 ID；不知道时留空"
+    category_id: PositiveId | None = Field(
+        default=None, description="已匹配到的产品分类数据库 ID；不知道时留空"
     )
     category_name: (
         Literal[
@@ -71,8 +70,8 @@ class RequirementDraftFields(BaseModel):
     device_type: str | None = Field(
         default=None, max_length=100, description="设备类型，例如：服务器、交换机、UPS"
     )
-    product_id: int | None = Field(
-        default=None, gt=0, description="已匹配到的商品数据库 ID；新商品或不知道时留空"
+    product_id: PositiveId | None = Field(
+        default=None, description="已匹配到的商品数据库 ID；新商品或不知道时留空"
     )
     product_name: str | None = Field(
         default=None, max_length=200, description="设备名称，例如：机架式服务器"
@@ -87,8 +86,8 @@ class RequirementDraftFields(BaseModel):
     )
     quantity: Quantity = Field(default=None, description="采购数量，必须用整数字符串填写，例如 2")
     unit: str | None = Field(default=None, max_length=20, description="采购单位，例如：台、个、套")
-    supplier_id: int | None = Field(
-        default=None, gt=0, description="已匹配到的供应商数据库 ID；新供应商或未选择时留空"
+    supplier_id: PositiveId | None = Field(
+        default=None, description="已匹配到的供应商数据库 ID；新供应商或未选择时留空"
     )
     supplier_name: str | None = Field(
         default=None, max_length=200, description="员工选择或填写的供应商名称"
@@ -203,8 +202,8 @@ class SubmitRequirement(BaseModel):
 
     version: int = Field(gt=0, description="采购草稿当前版本号")
     confirmed: Literal[True] = Field(description="员工是否已经人工确认；只能填写 true")
-    recommendation_id: int | None = Field(
-        default=None, gt=0, description="员工采用的推荐记录 ID；没有采用推荐时留空"
+    recommendation_id: PositiveId | None = Field(
+        default=None, description="员工采用的推荐记录 ID；没有采用推荐时留空"
     )
 
 
@@ -254,7 +253,7 @@ class HistoricalSupplierQuery(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     requirement_id: int = Field(gt=0, description="要查询历史推荐的当前采购草稿 ID")
-    product_id: int | None = Field(default=None, gt=0)
+    product_id: PositiveId | None = None
     device_type: str | None = Field(default=None, max_length=100)
     product_name: str | None = Field(default=None, max_length=200)
     product_full_name: str | None = Field(default=None, max_length=500)

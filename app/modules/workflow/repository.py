@@ -54,7 +54,7 @@ class WorkflowRepository:
         if view == "pending":
             filters.append(PurchaseRequirement.status == "PENDING_APPROVAL")
             approval_join = PurchaseApproval.requirement_id == -1
-            order_by = (PurchaseRequirement.submitted_at.asc(), PurchaseRequirement.id.asc())
+            order_by = (PurchaseRequirement.submitted_at.desc(), PurchaseRequirement.id.desc())
         else:
             filters.append(PurchaseApproval.approver_id == approver_id)
             approval_join = PurchaseApproval.requirement_id == PurchaseRequirement.id
