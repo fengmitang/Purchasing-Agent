@@ -41,6 +41,8 @@ class IntentCategory(Enum):
     CONFIRM_SUBMISSION = "confirm_submission"
     CANCEL_REQUIREMENT = "cancel_requirement"
     QUERY_STATUS = "query_status"
+    LIST_REQUIREMENTS = "list_requirements"
+    SEARCH_HISTORICAL_SUPPLIERS = "search_historical_suppliers"
     UNKNOWN = "unknown"
 
 
@@ -97,6 +99,16 @@ _TEMPLATES: dict[IntentCategory, list[str]] = {
         "我的采购申请现在什么状态",
         "查询采购进度",
         "审批到哪一步了",
+    ],
+    IntentCategory.LIST_REQUIREMENTS: [
+        "列出我的采购申请",
+        "查看我的全部采购单",
+        "我的待审批申请有哪些",
+    ],
+    IntentCategory.SEARCH_HISTORICAL_SUPPLIERS: [
+        "推荐这个草稿的历史供应商",
+        "查询以前买过这个设备的供应商",
+        "查一下相似采购的历史价格",
     ],
     IntentCategory.UNKNOWN: ["你好", "帮帮我", "今天天气怎么样"],
 }
@@ -321,8 +333,16 @@ class IntentRecognizer:
                 ["取消采购", "取消申请", "取消草稿", "撤销申请", "不要了", "不买了"],
             ),
             (
+                IntentCategory.SEARCH_HISTORICAL_SUPPLIERS,
+                ["历史供应商", "供应商推荐", "推荐供应商", "历史价格", "以前买过"],
+            ),
+            (
                 IntentCategory.QUERY_STATUS,
                 ["采购进度", "申请进度", "审批进度", "采购状态", "申请状态", "审批到哪"],
+            ),
+            (
+                IntentCategory.LIST_REQUIREMENTS,
+                ["列出我的", "我的采购申请", "我的采购单", "待审批申请", "全部采购单"],
             ),
             (
                 IntentCategory.VIEW_REQUIREMENT,

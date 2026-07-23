@@ -15,7 +15,10 @@ class AgentService:
         IntentCategory.MODIFY_REQUIREMENT,
         IntentCategory.VIEW_REQUIREMENT,
         IntentCategory.CONFIRM_SUBMISSION,
+        IntentCategory.CANCEL_REQUIREMENT,
         IntentCategory.QUERY_STATUS,
+        IntentCategory.LIST_REQUIREMENTS,
+        IntentCategory.SEARCH_HISTORICAL_SUPPLIERS,
     }
 
     def __init__(

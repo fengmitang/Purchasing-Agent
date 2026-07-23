@@ -151,15 +151,15 @@ get_requirement_detail
 update_requirement_draft
 start_new_requirement
 switch_active_requirement
+submit_requirement
+cancel_requirement
+search_historical_suppliers
+list_my_requirements
 ```
 
 当前未作为 Agent Tool 开放的能力包括：
 
 ```text
-正式提交审批
-取消或撤回采购草稿
-分页查询本人采购申请
-历史供应商推荐查询
 白名单查询
 黑名单操作
 审批操作

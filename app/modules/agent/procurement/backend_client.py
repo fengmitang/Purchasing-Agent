@@ -2,7 +2,13 @@ from typing import Any
 
 import httpx
 
-from app.modules.agent.procurement.schemas import RequirementDetail
+from app.modules.agent.procurement.schemas import (
+    HistoricalSupplierRecommendationResult,
+    RequirementDetail,
+    RequirementListResult,
+    RequirementSubmissionResult,
+    RequirementSummary,
+)
 
 
 class ProcurementBackendError(RuntimeError):
@@ -89,6 +95,89 @@ class ProcurementBackendClient:
         )
         return RequirementDetail.model_validate(data)
 
+    async def submit(
+        self,
+        requirement_id: int,
+        payload: dict[str, Any],
+        *,
+        authorization: str | None,
+        request_id: str,
+        idempotency_key: str,
+    ) -> RequirementSubmissionResult:
+        data = await self._request(
+            "POST",
+            f"/api/v1/purchase-requirements/{requirement_id}/submit",
+            payload=payload,
+            authorization=authorization,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+        )
+        return RequirementSubmissionResult.model_validate(data)
+
+    async def cancel_draft(
+        self,
+        requirement_id: int,
+        payload: dict[str, Any],
+        *,
+        authorization: str | None,
+        request_id: str,
+        idempotency_key: str,
+    ) -> RequirementDetail:
+        data = await self._request(
+            "POST",
+            f"/api/v1/purchase-requirements/{requirement_id}/cancel",
+            payload=payload,
+            authorization=authorization,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+        )
+        return RequirementDetail.model_validate(data)
+
+    async def search_historical_suppliers(
+        self,
+        payload: dict[str, Any],
+        *,
+        authorization: str | None,
+        request_id: str,
+    ) -> HistoricalSupplierRecommendationResult:
+        data = await self._request(
+            "POST",
+            "/api/v1/recommendations/historical-suppliers/search",
+            payload=payload,
+            authorization=authorization,
+            request_id=request_id,
+        )
+        return HistoricalSupplierRecommendationResult.model_validate(data)
+
+    async def list_mine(
+        self,
+        *,
+        authorization: str | None,
+        request_id: str,
+        status: str | None,
+        page: int,
+        page_size: int,
+    ) -> RequirementListResult:
+        query = f"?mine=true&page={page}&page_size={page_size}"
+        if status:
+            from urllib.parse import quote
+
+            query += f"&status={quote(status)}"
+        envelope = await self._request(
+            "GET",
+            f"/api/v1/purchase-requirements{query}",
+            authorization=authorization,
+            request_id=request_id,
+            include_page=True,
+        )
+        page_data = envelope["page"]
+        return RequirementListResult(
+            items=[RequirementSummary.model_validate(item) for item in envelope["data"]],
+            total=page_data["total"],
+            page=page_data["number"],
+            page_size=page_data["size"],
+        )
+
     async def _request(
         self,
         method: str,
@@ -98,6 +187,7 @@ class ProcurementBackendClient:
         authorization: str | None,
         request_id: str,
         idempotency_key: str | None = None,
+        include_page: bool = False,
     ) -> Any:
         if not self.base_url:
             raise ProcurementBackendError(
@@ -153,4 +243,13 @@ class ProcurementBackendClient:
                 "采购后端返回格式不符合契约。",
                 status_code=502,
             )
+        if include_page:
+            page = body.get("page")
+            if not isinstance(page, dict):
+                raise ProcurementBackendError(
+                    "INVALID_BACKEND_RESPONSE",
+                    "采购后端分页响应格式不符合契约。",
+                    status_code=502,
+                )
+            return {"data": body["data"], "page": page}
         return body["data"]

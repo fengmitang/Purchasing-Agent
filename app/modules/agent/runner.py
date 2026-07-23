@@ -18,12 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 class ProcurementAgentRunner:
-    CONFIRMATION_INTENTS = {
-        IntentCategory.CANCEL_REQUIREMENT,
-        IntentCategory.CONFIRM_SUBMISSION,
-        IntentCategory.VIEW_REQUIREMENT,
-        IntentCategory.QUERY_STATUS,
-    }
     FALSE_SUBMISSION_PHRASES = (
         "提交成功",
         "已成功提交",
@@ -181,11 +175,32 @@ class ProcurementAgentRunner:
     def _allowed_tools(self, context: AgentContext) -> set[str]:
         if context.scene == AgentScene.GENERAL_QUERY:
             return set()
-        if (
-            context.intent in self.CONFIRMATION_INTENTS
-            or context.scene == AgentScene.PROCUREMENT_STATUS
-        ):
+        if context.intent == IntentCategory.LIST_REQUIREMENTS:
+            return {"list_my_requirements"}
+        if context.intent == IntentCategory.QUERY_STATUS:
+            return (
+                {"get_requirement_detail"}
+                if context.procurement_state is not None
+                else {"list_my_requirements"}
+            )
+        if context.intent == IntentCategory.VIEW_REQUIREMENT:
             return {"get_requirement_detail"}
+        if context.intent == IntentCategory.CONFIRM_SUBMISSION:
+            if context.procurement_state is None:
+                return set()
+            return {
+                "get_requirement_detail",
+                "update_requirement_draft",
+                "submit_requirement",
+            }
+        if context.intent == IntentCategory.CANCEL_REQUIREMENT:
+            if context.procurement_state is None:
+                return set()
+            return {"get_requirement_detail", "cancel_requirement"}
+        if context.intent == IntentCategory.SEARCH_HISTORICAL_SUPPLIERS:
+            if context.procurement_state is None:
+                return set()
+            return {"get_requirement_detail", "search_historical_suppliers"}
         if context.procurement_state is None:
             return {"create_requirement_draft"}
         return {
@@ -223,11 +238,6 @@ class ProcurementAgentRunner:
             else None
         )
         skill_text = self._procurement_skills()
-        unsupported_action_rule = (
-            "当前没有采购需求取消或撤销工具；只能读取草稿并说明未执行取消，不得声称状态已改变。"
-            if context.intent == IntentCategory.CANCEL_REQUIREMENT
-            else ""
-        )
         return f"""
 你是数据中心采购需求Agent。你的目标是通过多轮对话和受控工具，帮助当前用户形成真实、可追踪的采购需求草稿。
 
@@ -242,19 +252,24 @@ class ProcurementAgentRunner:
 6. 无法判断用户是在修改当前草稿还是发起新需求时，先问清楚，不要擅自覆盖或新建。
 7. update_requirement_draft的changes只放用户本轮新增或明确修改的字段；没有提到的字段不要传，普通null不能清空字段。
 8. 只有用户明确说清空或删除某字段时，才把字段名放进clear_fields。
-9. 根据后端missing_fields追问，一次最多询问三个关键问题；conflicts必须请用户确认；warnings需要明确提示。
-10. 如果用户明确表示某些信息目前不提供、先保存或直接提交，不要反复追问；展示当前草稿和仍缺少的信息即可。
-11. 不得编造需求人、时间、产品、型号、价格、供应商、历史记录、编号或状态。需求人来自认证信息，时间来自后端。
-12. 当前没有正式提交工具。用户说“确认提交”时，只能查询并展示最新草稿，明确说明“草稿已保存但尚未正式提交审批”，绝不能声称提交成功。
-13. 工具失败时根据code调整行动，不要把内部异常、密钥或连接信息回复给用户。
-14. 回复使用简洁自然的中文，先说明本轮真实完成了什么，再说明还需要用户做什么。
+9. 提交审批必填字段仅包括application_reason、application_location、product_name、quantity。
+10. 只能根据后端返回的missing_fields追问，最多两个。禁止通过检查工具结果中值为null的字段自行推断缺失项；提交完整性只以missing_fields为准。category_id、category_name、device_type、product_id、product_full_name、brand、model、specification、unit、supplier_id、supplier_name、unit_price、currency均为选填，不得主动追问或阻止提交。
+11. 如果missing_fields为空且conflicts为空，不得继续追问任何采购字段，应明确告诉用户：“当前提交所需信息已经完整，可以提交审批。”conflicts必须请用户确认；warnings需要明确提示。
+12. 用户明确表示“不知道”“暂不提供”“不用填”或“先保存”时，通过update_requirement_draft.defer_fields记录；不得继续追问对应选填字段。若deferred_fields中的字段仍被后端列入missing_fields，只说明草稿可保留但不能提交。
+13. 不得编造需求人、时间、产品、型号、价格、供应商、历史记录、编号或状态。需求人来自认证信息，时间来自后端。
+14. 用户本轮明确确认提交时，先处理本轮新增字段，再读取最新详情，最后调用submit_requirement；缺失、冲突、更新失败或查询失败时不得提交。
+15. 用户明确确认取消且提供原因时，读取最新详情后调用cancel_requirement；缺少原因时只追问原因。
+16. 历史推荐只调用search_historical_suppliers并忠实展示结果，不得自动选中或修改供应商。
+17. list_my_requirements只查询当前员工本人申请，不得自动切换活动草稿。
+18. 只有提交工具返回PENDING_APPROVAL或取消工具返回CANCELLED后，才能声称对应动作成功。
+19. 工具失败时根据code调整行动，不要把内部异常、密钥或连接信息回复给用户。
+20. 回复使用简洁自然的中文，先说明本轮真实完成了什么，再说明还需要用户做什么。
 
 当前意图：{context.intent.value}
 当前场景：{context.scene.value}
 当前会话状态：{json.dumps(state, ensure_ascii=False)}
 
 {skill_text}
-{unsupported_action_rule}
 """.strip()
 
     def _procurement_skills(self) -> str:
@@ -263,6 +278,7 @@ class ProcurementAgentRunner:
         selected_names = {
             "collect-procurement-requirement",
             "confirm-procurement-requirement",
+            "recommend-historical-supplier",
         }
         blocks = [
             skill.to_prompt_block()
@@ -293,17 +309,27 @@ class ProcurementAgentRunner:
 
     def _guard_submission_claim(self, context: AgentContext, response: str) -> str:
         if context.intent == IntentCategory.CANCEL_REQUIREMENT:
+            if (
+                context.procurement_state is not None
+                and context.procurement_state.status == "CANCELLED"
+            ):
+                return response
             if any(phrase in response for phrase in self.FALSE_CANCELLATION_PHRASES):
-                return "后端尚未接入采购需求取消接口，因此没有执行取消或撤销。你可以查看当前草稿。"
-            required_notice = "当前没有可执行取消或撤销的受控接口"
+                return "取消工具没有返回CANCELLED，因此没有执行成功；当前草稿状态未被描述为已取消。"
+            required_notice = "本轮没有确认成功取消采购草稿"
             if required_notice not in response:
                 return response.rstrip() + f"\n\n{required_notice}。"
             return response
         if context.intent != IntentCategory.CONFIRM_SUBMISSION:
             return response
+        if (
+            context.procurement_state is not None
+            and context.procurement_state.status == "PENDING_APPROVAL"
+        ):
+            return response
         if any(phrase in response for phrase in self.FALSE_SUBMISSION_PHRASES):
-            return "当前采购草稿已保存，但后端尚未接入正式提交接口，因此尚未正式提交审批。你可以继续修改或查看草稿。"
-        required_notice = "草稿已保存但尚未正式提交审批"
+            return "提交工具没有返回PENDING_APPROVAL，因此尚未正式提交审批。"
+        required_notice = "本轮没有确认成功提交审批"
         if required_notice not in response:
             return response.rstrip() + f"\n\n{required_notice}。"
         return response

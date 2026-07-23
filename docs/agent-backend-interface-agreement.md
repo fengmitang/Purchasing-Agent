@@ -219,6 +219,19 @@ Agent 端不得：
 | Implemented | `GET /api/v1/purchase-requirements` | 查询本人采购申请 | 状态查询或找回历史草稿时调用，必须分页 |
 | Implemented（名单过滤待名单模块接入） | `POST /api/v1/recommendations/historical-suppliers/search` | 查询相似历史采购和供应商 | 商品信息足以检索时调用；结果仅供参考 |
 
+### 6.1.1 当前 Agent Tool 映射
+
+员工采购 Agent 已注册并通过动态白名单开放以下后端能力：
+
+- `submit_requirement` → `POST /api/v1/purchase-requirements/{id}/submit`
+- `cancel_requirement` → `POST /api/v1/purchase-requirements/{id}/cancel`
+- `list_my_requirements` → `GET /api/v1/purchase-requirements`
+- `search_historical_suppliers` → `POST /api/v1/recommendations/historical-suppliers/search`
+
+提交和取消必须由员工明确确认，并由后端再次校验本人数据范围、最新版本和 `DRAFT` 状态。
+历史推荐的检索条件来自当前活动草稿的最新后端详情，模型不能指定其他员工或任意需求；推荐结果
+不会自动改写供应商。列表工具只查询当前员工本人申请，不会自动切换活动草稿。
+
 ### 6.2 创建草稿
 
 `POST /api/v1/purchase-requirements/drafts`
