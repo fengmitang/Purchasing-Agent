@@ -18,6 +18,7 @@ button, input, textarea { font: inherit; }
 .sidebar .ant-menu { background: transparent; color: #c9dce5; border: 0; padding: 12px; }
 .sidebar .ant-menu-item { height: 46px; line-height: 46px; margin-block: 6px; }
 .sidebar .ant-menu-item-selected { background: rgba(94,234,212,.16) !important; color: #83f3df !important; }
+.menu-label-with-badge { width: 100%; display: inline-flex; align-items: center; justify-content: space-between; gap: 10px; }
 .sidebar-note { position: absolute; left: 16px; right: 16px; bottom: 24px; display: flex; gap: 10px; padding: 14px; border: 1px solid rgba(169,198,213,.2); border-radius: 12px; color: #8dded2; background: rgba(255,255,255,.05); }
 .sidebar-note b, .sidebar-note span { display: block; }
 .sidebar-note b { color: #e4f5f4; font-size: 13px; }

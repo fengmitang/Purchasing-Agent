@@ -176,11 +176,7 @@ def context(employee_no: str, key: str) -> AuditContext:
 async def test_incomplete_draft_is_persisted_and_idempotent(
     service: RequirementService,
 ) -> None:
-    command_payload = CreateRequirementDraft(
-        application_reason="测试环境需要扩容",
-        quantity="2.0000",
-        unit="台",
-    )
+    command_payload = CreateRequirementDraft()
 
     first = await service.create_draft(command_payload, context("API-E001", "create-1"))
     replay = await service.create_draft(command_payload, context("API-E001", "create-1"))
@@ -190,6 +186,7 @@ async def test_incomplete_draft_is_persisted_and_idempotent(
     assert first.applicant.employee_no == "API-E001"
     assert first.requested_at == datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
     assert "product_name" in first.missing_fields
+    assert "application_reason" in first.missing_fields
 
     with pytest.raises(DomainError) as captured:
         await service.create_draft(
