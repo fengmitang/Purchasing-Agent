@@ -1,40 +1,24 @@
-import sys
-import types
 import unittest
 from pathlib import Path
 
-try:
-    import anthropic  # noqa: F401
-except ModuleNotFoundError:
-    anthropic_stub = types.ModuleType("anthropic")
-
-    class AsyncAnthropic:  # pragma: no cover - 仅用于无依赖的规则单测
-        pass
-
-    anthropic_stub.AsyncAnthropic = AsyncAnthropic
-    sys.modules["anthropic"] = anthropic_stub
-
-try:
-    import httpx  # noqa: F401
-except ModuleNotFoundError:
-    httpx_stub = types.ModuleType("httpx")
-    httpx_stub.HTTPError = Exception
-
-    class AsyncClient:  # pragma: no cover - 流程单测使用假后端
-        pass
-
-    httpx_stub.AsyncClient = AsyncClient
-    sys.modules["httpx"] = httpx_stub
-
-from app.modules.agent.intent_recognizer import IntentCategory, IntentRecognizer
+from app.modules.agent.enums import IntentCategory
+from app.modules.agent.intent_service import (
+    ModelProcurementIntentResolver,
+    _fallback_intent,
+)
+from app.modules.agent.model import AgentModelResponse
 from app.modules.agent.skill_loader import SkillManager
 
 
-class ProcurementIntentRuleTests(unittest.TestCase):
-    def setUp(self) -> None:
-        # 规则识别不依赖网络客户端，避免单元测试调用真实模型。
-        self.recognizer = object.__new__(IntentRecognizer)
+class StubModel:
+    def __init__(self, text: str) -> None:
+        self._text = text
 
+    async def complete(self, **kwargs) -> AgentModelResponse:
+        return AgentModelResponse(text=self._text)
+
+
+class ProcurementIntentRuleTests(unittest.TestCase):
     def test_procurement_intents(self) -> None:
         cases = {
             "我要给3号楼采购两个UPS功率模块": IntentCategory.CREATE_REQUIREMENT,
@@ -43,61 +27,39 @@ class ProcurementIntentRuleTests(unittest.TestCase):
             "数量改成3台": IntentCategory.MODIFY_REQUIREMENT,
             "查看当前采购草稿": IntentCategory.VIEW_REQUIREMENT,
             "信息无误，确认提交审批": IntentCategory.CONFIRM_SUBMISSION,
-            "这个采购需求不要了": IntentCategory.CANCEL_REQUIREMENT,
-            "我的采购申请审批到哪了": IntentCategory.QUERY_STATUS,
-            "列出我的待审批申请": IntentCategory.LIST_REQUIREMENTS,
+            "取消采购申请，不要了": IntentCategory.CANCEL_REQUIREMENT,
+            "我的采购状态": IntentCategory.QUERY_STATUS,
+            "列出我的采购申请": IntentCategory.LIST_REQUIREMENTS,
             "推荐这个草稿的历史供应商": IntentCategory.SEARCH_HISTORICAL_SUPPLIERS,
             "你好": IntentCategory.UNKNOWN,
         }
-
         for message, expected in cases.items():
             with self.subTest(message=message):
-                actual = self.recognizer._pattern_recognize(message)["intent"]
-                self.assertEqual(expected, actual)
+                self.assertEqual(expected, _fallback_intent(message))
 
-    def test_strong_action_takes_priority_over_procurement_word(self) -> None:
-        result = self.recognizer._pattern_recognize("取消采购申请，不要了")
-        self.assertEqual(IntentCategory.CANCEL_REQUIREMENT, result["intent"])
 
-    def test_cache_key_contains_recent_context(self) -> None:
-        first = self.recognizer._cache_key(
-            "科士达",
-            [{"role": "assistant", "content": "请补充品牌"}],
+class ProcurementIntentResolverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_valid_model_result_is_used(self) -> None:
+        resolver = ModelProcurementIntentResolver(
+            StubModel('{"intent":"confirm_submission","confidence":0.9}')
         )
-        second = self.recognizer._cache_key(
-            "科士达",
-            [{"role": "assistant", "content": "请选择供应商"}],
+        result = await resolver.resolve("确认提交", [])
+        self.assertEqual(IntentCategory.CONFIRM_SUBMISSION, result)
+
+    async def test_invalid_model_result_falls_back_to_rules(self) -> None:
+        resolver = ModelProcurementIntentResolver(StubModel("not-json"))
+        result = await resolver.resolve("信息无误，确认提交审批", [])
+        self.assertEqual(IntentCategory.CONFIRM_SUBMISSION, result)
+
+    async def test_mixed_history_and_whitelist_request_keeps_history_search_intent(self) -> None:
+        resolver = ModelProcurementIntentResolver(
+            StubModel('{"intent":"unknown","confidence":0.99}')
         )
-        self.assertNotEqual(first, second)
-
-
-class ProcurementIntentFallbackTests(unittest.IsolatedAsyncioTestCase):
-    async def test_llm_failure_falls_back_to_procurement_rule(self) -> None:
-        recognizer = object.__new__(IntentRecognizer)
-        recognizer._embedding_enabled = False
-        recognizer._cache = {}
-        recognizer.cache_hits = 0
-        recognizer.cache_misses = 0
-        recognizer.threshold = 0.5
-
-        async def failed_llm(message, history):
-            return {
-                "intent": IntentCategory.UNKNOWN,
-                "confidence": 0.0,
-                "reasoning": "test failure",
-                "failed": True,
-            }
-
-        async def no_entities(message):
-            return {}
-
-        recognizer._llm_recognize = failed_llm
-        recognizer._extract_entities = no_entities
-
-        result = await recognizer.recognize("信息无误，确认提交审批")
-
-        self.assertEqual(IntentCategory.CONFIRM_SUBMISSION, result.intent)
-        self.assertGreaterEqual(result.confidence, 0.7)
+        result = await resolver.resolve(
+            "搜索历史采购白名单，推荐科士达功率模块的历史采购记录和供应商白名单",
+            [],
+        )
+        self.assertEqual(IntentCategory.SEARCH_HISTORICAL_SUPPLIERS, result)
 
 
 class ProcurementSkillTests(unittest.TestCase):

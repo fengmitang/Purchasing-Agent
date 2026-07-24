@@ -38,9 +38,9 @@ Router
 ```text
 Agent Router
   -> AgentChatService
-  -> IntentService
+  -> RouteResolver
   -> AgentService
-  -> ProcurementAgentRunner
+  -> AgentLoopRuntime
   -> ToolExecutor
   -> AgentTool
   -> RequirementBackendProtocol
@@ -78,6 +78,10 @@ Business Service
 app/modules/agent/router.py
 app/modules/agent/chat_service.py
 app/modules/agent/chat_store.py
+app/modules/agent/routes.py
+app/modules/agent/definitions.py
+app/modules/agent/policies.py
+app/modules/agent/memory.py
 app/modules/agent/intent_service.py
 app/modules/agent/service.py
 app/modules/agent/runner.py
@@ -91,15 +95,30 @@ app/modules/agent/tools/
 app/modules/agent/procurement/
 ```
 
-`ProcurementAgentRunner` 是当前模型决策和工具执行主循环。
+`AgentLoopRuntime` 是唯一的模型决策和工具执行主循环；旧 `ProcurementAgentRunner` 名称和兼容别名已删除。
+
+`RouteResolver` 只负责领域路由（`GENERAL`/`PROCUREMENT`），不负责采购操作意图或工具授权。
+`ToolPolicy` 负责领域隔离，并仅对提交、取消和更新三类高风险写操作实施前置限制。
+`MemoryProvider` 和 `KnowledgeProvider` 当前仅为只读接口预留，不能覆盖 MySQL 正式事实或决定权限。
+
+`AgentDefinition` 负责组合领域路由、`PromptProvider`、`ToolPolicy` 和可选 Skill 选择器。采购业务 Prompt 的唯一实现位于 `app/modules/agent/procurement/prompt.py`；统一 Runtime 不得内嵌或复制采购业务 Prompt。
+Bootstrap 当前同时装配 General 与 Procurement Definition；采购 Skill 通过 `SkillManagerSelector` 注入，Runtime 不再自行决定 Skill 集合。
+HTTP 聊天路径中，`ChatStore` 只保存聊天历史、消息状态、会话锁、幂等键和 `active_route`；采购草稿短期状态只由 `ProcurementSessionStore` 保存。
+生产环境中 ChatStore 与 ProcurementSessionStore 均使用异步 Redis 实现；两类会话键都必须包含组织、员工和 `conversation_id`。内存 Store 仅允许用于本地和测试。
+聊天回合必须以 PROCESSING 状态写入，只有聊天消息、Route、采购 Session 和聊天幂等结果全部提交成功后才能标记 COMPLETED；失败时助手与用户消息均标记 FAILED，并恢复本轮之前的 Route 和采购 Session。跨 Store 会话重置必须幂等且可安全重试，重试后收敛到两个 Store 都已清理。
+`orchestrator.py` 已删除；当前运行路径统一使用 `AgentLoopRuntime`，不得重新引入并行采购执行链。
+
+`AgentChatService` 必须先通过 `RouteResolver` 决定领域；只有 `PROCUREMENT` 路由才调用 `ModelProcurementIntentResolver`。`IntentCategory` 定义在 `enums.py`，旧多策略 `IntentRecognizer` 已删除，不得重新引入并行意图识别链。历史上下文推断由 `RouteResolver` 负责，不能在多个 Service/Runtime 中重复实现。无法确认领域时使用无工具的安全追问。`AgentService.should_handle` 已删除，不得重新引入第二套路由入口。
+`ResponseGuard` 负责拦截模型未获得后端成功结果时的提交/取消成功措辞。
+Memory/Knowledge Provider 只读召回失败时必须安全降级为空结果，不得阻断正常采购工具执行。
 
 除非 Issue 明确要求迁移，不得：
 
 * 新建另一套 Handler 主循环；
-* 新建另一套 Agent Orchestrator 取代 Runner；
+* 新建另一套 Agent Orchestrator 取代 Runtime；
 * 在 Router 中实现 Agent 决策；
 * 把固定 Workflow 伪装成模型自主决策；
-* 在遗留 `orchestrator.py` 中继续增加与 Runner 重复的采购执行逻辑；
+* 重新创建与 Runtime 重复的采购执行逻辑；
 * 删除遗留路径前不检查实际引用和测试影响。
 
 ## 6. Agent 决策模型
@@ -114,7 +133,7 @@ app/modules/agent/procurement/
 * Scene 和 Stage；
 * 当前活动采购草稿状态；
 * 本轮已经获得的工具结果；
-* Runner 动态开放的工具集合；
+* ToolPolicy 生成的工具执行集合；
 * 已加载并允许注入的业务 Skill。
 
 模型可以选择：
@@ -169,18 +188,22 @@ list_my_requirements
 
 即使对应后端 API 或 Service 已经实现，模型也不得声称已经执行这些未注册工具对应的动作。
 
-### 7.2 动态工具授权
+### 7.2 工具执行 Policy
 
-Runner 必须根据当前 Scene、Intent 和会话状态生成本轮 `allowed_tools`。
+采购路由下，模型可以看到当前 ToolRegistry 中全部已注册采购工具的 Schema，以便理解完整能力并自主规划；General 路由仍不得看到采购工具。
+
+模型可见性不等于执行权限。采购路由默认允许执行全部已注册采购工具，但 ToolPolicy 必须对三类高风险写操作实施前置限制，ToolExecutor 必须在每次执行时使用 `allowed_tools` 再次校验。
 
 基本原则：
 
-* `GENERAL_QUERY` 不开放任何业务工具；
-* 没有活动草稿时，只开放创建第一张草稿所需工具；
-* 已有活动草稿时，才开放查询、增量修改、新建另一张草稿和切换草稿；
-* 查看、状态查询、确认提交或取消等场景，只开放当前真实允许执行的工具；
-* 工具已注册但不在本轮 `allowed_tools` 中时，必须返回 `TOOL_NOT_ALLOWED`；
-* 不得仅依靠 Prompt 约束高风险工具，必须通过代码白名单限制。
+* `GENERAL_QUERY` 不向模型提供任何采购 Tool Schema；
+* `PROCUREMENT` 向模型提供全部已注册采购 Tool Schema；
+* `update_requirement_draft` 仅在存在活动草稿时允许执行；
+* `submit_requirement` 仅在用户本轮明确确认提交时允许执行；
+* `cancel_requirement` 仅在用户本轮明确确认取消并提供取消原因时允许执行；
+* 其余已注册采购工具不再按 Intent、Scene 或 Stage 动态裁剪；
+* 模型调用已注册但不在本轮 `allowed_tools` 中的工具时，必须返回 `TOOL_NOT_ALLOWED`，不得执行；
+* 不得仅依靠 Prompt 约束高风险工具，必须由 ToolExecutor、Agent Tool 和 Business Service 继续校验。
 
 ### 7.3 工具参数和执行
 
@@ -213,7 +236,7 @@ Runner 必须根据当前 Scene、Intent 和会话状态生成本轮 `allowed_to
 1. `AgentTool` 实现；
 2. 工具输入 Pydantic Schema；
 3. `ToolRegistry` 注册；
-4. Runner 的动态 `allowed_tools`；
+4. ToolPolicy 的动态 `allowed_tools`；
 5. `RequirementBackendProtocol` 或对应 Backend Protocol；
 6. 同进程 Business Service Adapter；
 7. 必要的外部 Backend Client；
@@ -231,7 +254,8 @@ Runner 必须根据当前 Scene、Intent 和会话状态生成本轮 `allowed_to
 Agent 主循环必须满足：
 
 * 最大迭代次数有限；
-* 每次模型调用只获得当前允许的工具 Schema；
+* General 模型调用不获得采购工具 Schema；Procurement 模型调用获得全部已注册采购工具 Schema；
+* 每次工具执行仍必须使用当前 ToolPolicy 的 `allowed_tools` 校验；
 * 工具调用结果必须返回模型后再由模型决定下一步；
 * 终止错误出现时停止本轮循环；
 * 达到迭代上限时停止，不得继续重复写入；
@@ -260,16 +284,17 @@ Agent 主循环必须满足：
 * 会话重置只清除短期会话和聊天状态，不得删除、取消或修改 MySQL 采购事实。
 * HTTP 聊天路径不得让多个 Store 独立维护同一份活动草稿状态。
 * `AgentChatService` 负责持久化聊天路径的短期状态；AgentService 在该路径中不得再次独立持久化同一状态。
+* 交互式 CLI 默认必须通过 `/api/v1/auth/login` 建立服务端 Session Cookie，再访问 Agent API；密码使用安全输入或专用环境变量，不得写入日志。开发身份 Header 只能通过显式 `--dev-headers` 在本地环境启用。
 
 ## 10. Skill 和 Prompt
 
 * Skill 是业务指导文本，不是权限控制器、状态机或数据源。
-* Skill 不得扩大当前 Tool Registry 和 `allowed_tools` 提供的能力。
+* Skill 不得扩大当前 Tool Registry，也不得把模型可见工具描述成已经获得执行权限。
 * Skill 中描述的能力必须与当前实际注册工具一致。
 * Skill 不得让模型声称已经执行尚未接入的提交、取消、推荐或审批操作。
 * `SkillManager` 初始化后必须显式调用 `load()`，确认 Skill 已被扫描和解析。
 * 未调用 `load()` 时，不得假定 Markdown Skill 已经生效。
-* Runner 只注入经过选择、启用且与当前场景相符的 Skill。
+* AgentLoopRuntime 只注入经过 SkillSelector 选择、启用且与当前场景相符的 Skill。
 * 单个 Skill 解析失败不得影响其他 Skill，但必须记录安全错误。
 * Prompt 中必须明确：未知事实不得编造，工具结果和后端数据是正式事实来源。
 * Prompt、Skill 和模型返回内容不得包含密钥、Token、数据库连接信息或无关个人信息。

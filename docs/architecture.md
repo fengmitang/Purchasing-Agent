@@ -15,8 +15,8 @@
 
 采购对话采用自研受控 Tool Calling Agent：
 
-* 模型根据目标、上下文、会话状态和动态工具集合决定下一步；
-* Runner 控制迭代次数和工具开放范围；
+* 模型根据目标、上下文、会话状态和已注册工具集合决定下一步；
+* AgentLoopRuntime 控制迭代次数，ToolPolicy 隔离领域并限制三类高风险写操作；
 * ToolExecutor 校验工具权限和参数；
 * Business Service 决定权限、业务状态、事务、幂等和审计；
 * MySQL 保存正式采购事实；
@@ -72,9 +72,10 @@ Router
 ```text
 Agent Router
   -> AgentChatService
-  -> IntentService
+  -> RouteResolver
+  -> ProcurementIntentResolver（仅 PROCUREMENT）
   -> AgentService
-  -> ProcurementAgentRunner
+  -> AgentLoopRuntime
   -> ToolExecutor
   -> AgentTool
   -> RequirementBackendProtocol
@@ -111,12 +112,13 @@ LLM -> 正式状态修改
 | 层或组件                     | 负责                                        | 禁止                           |
 | ------------------------ | ----------------------------------------- | ---------------------------- |
 | Router                   | HTTP/回调协议、身份依赖、Header、输入输出 Schema、分页参数    | ORM 查询、业务授权、事务提交、Agent 决策    |
-| AgentChatService         | 会话锁、聊天幂等、历史消息、短期状态、意图调用、Agent 调用、结果保存     | 直接修改正式采购事实                   |
-| IntentService            | 根据当前消息和历史识别本轮意图                           | 执行业务写入、生成正式状态                |
-| AgentService             | 构建 AgentContext、确定 Scene/Stage、调用 Runner  | 直接访问数据库                      |
-| ProcurementAgentRunner   | 构造 Prompt、动态开放工具、执行模型—工具循环、限制迭代           | 绕过 ToolExecutor、直接写业务数据      |
+| AgentChatService         | 会话锁、聊天幂等、历史消息、领域路由、采购意图调用、Agent 调用、结果保存 | 直接修改正式采购事实                   |
+| RouteResolver            | 根据消息、有限历史和 `active_route` 决定领域             | 决定采购工具权限或执行业务写入              |
+| ProcurementIntentResolver | 仅在采购领域识别细粒度操作意图                          | 决定领域路由、执行写入或生成正式状态           |
+| AgentService             | 构建 AgentContext、确定 Scene/Stage、调用 Runtime | 直接访问数据库                      |
+| AgentLoopRuntime         | 通过 Definition 调用 Prompt/Policy，执行统一模型—工具循环 | 内嵌领域路由、采购 Prompt 或业务权限判断       |
 | Model Adapter            | 统一 Anthropic/OpenAI 兼容模型的文本和 Tool Call 格式 | 承担业务权限、状态机或数据库逻辑             |
-| ToolRegistry             | 注册可供模型发现的工具和 Schema                       | 自动授权全部工具                     |
+| ToolRegistry             | 注册采购路由下可供模型发现的全部工具和 Schema              | 决定工具执行权限                     |
 | ToolExecutor             | 工具白名单、参数校验、重复写阻断、安全错误转换                   | 代替 Business Service 判断正式业务状态 |
 | AgentTool                | 把受控业务能力暴露给模型，转换参数和结果                      | 直接访问 ORM、Repository 或 MySQL  |
 | Backend Protocol/Adapter | 隔离 Agent 与具体业务模块，实现同进程或远程调用适配             | 绕过 Business Service          |
@@ -172,7 +174,7 @@ app/
       chat_store.py
       chat_schemas.py
       intent_service.py
-      intent_recognizer.py
+      intent_service.py
       service.py
       runner.py
       model.py
@@ -275,20 +277,23 @@ Router 不决定使用哪个工具，也不直接调用 RequirementService。
 3. 校验聊天请求幂等；
 4. 读取聊天历史和短期采购状态；
 5. 记录用户消息为 `PROCESSING`；
-6. 调用 IntentService；
-7. 调用 AgentService；
-8. 保存 Agent 回复和新的短期状态；
-9. 将用户消息更新为 `COMPLETED`；
-10. 保存聊天幂等结果；
-11. 发生失败时将消息标记为 `FAILED`。
+6. 调用 RouteResolver；无法确认时保持无工具并安全追问；
+7. 仅在 Procurement 路由调用 ProcurementIntentResolver；
+8. 调用 AgentService；
+9. 保存 Agent 回复和新的短期状态；
+10. 将用户消息更新为 `COMPLETED`；
+11. 保存聊天幂等结果；
+12. 发生失败时将消息标记为 `FAILED`。
 
 同一会话串行执行，不同会话允许并行。
 
 失败的消息不得作为成功上下文回放给模型。
 
-### 7.3 IntentService
+### 7.3 RouteResolver 和 ProcurementIntentResolver
 
-IntentService 识别当前消息的操作意图，例如：
+RouteResolver 是领域路由唯一入口。新会话根据当前消息和有限历史判断 General 或 Procurement；已有 `active_route` 时默认保持当前领域，只有明确切换指令才改变。无法确认领域时进入 General 的无工具安全追问。
+
+ProcurementIntentResolver 只在 Procurement 路由内识别操作意图，例如：
 
 ```text
 create_requirement
@@ -303,7 +308,7 @@ unknown
 
 意图只是 Agent 上下文的一部分，不能直接引起数据库状态变化。
 
-低置信度或解析失败时可以使用规则化降级，但降级结果仍必须经过 Runner 和工具权限控制。
+低置信度或解析失败时可以使用规则化降级，但降级结果仍必须经过 Runtime 和 ToolPolicy 控制。
 
 ### 7.4 AgentService
 
@@ -313,20 +318,19 @@ AgentService 负责：
 * 根据意图确定 Scene；
 * 根据采购状态确定 Stage；
 * 构造 `AgentContext`；
-* 调用 `ProcurementAgentRunner`；
+* 调用 `AgentLoopRuntime`；
 * 返回结构化 `AgentHandleResult`。
 
 在 HTTP 聊天路径中，短期状态由 `AgentChatService` 的 Chat Store 持久化。不得让 AgentService 再独立保存另一份不同步的会话状态。
 
-### 7.5 ProcurementAgentRunner
+### 7.5 AgentLoopRuntime
 
-Runner 是当前 Agent 的核心循环，负责：
+AgentLoopRuntime 是唯一 Agent 核心循环，负责：
 
 * 创建请求级 Trace；
 * 加载最近对话；
-* 根据上下文计算本轮允许工具；
-* 构造 System Prompt；
-* 注入允许的 Skill；
+* 通过当前 AgentDefinition 的 ToolPolicy 计算本轮允许工具；
+* 通过 PromptProvider 构造 System Prompt；
 * 调用模型；
 * 解析文本和 Tool Call；
 * 通过 ToolExecutor 执行工具；
@@ -335,9 +339,9 @@ Runner 是当前 Agent 的核心循环，负责：
 * 阻止虚假提交和虚假取消声明；
 * 返回最终 Scene、Stage、短期状态和 Trace。
 
-Runner 不是固定业务 Workflow。
+Runtime 不负责领域路由、采购意图识别、业务权限判断或采购 Prompt 文本维护，也不是固定业务 Workflow。
 
-模型可以自主决定本轮是否调用工具、调用哪个允许工具、是否继续调用或向用户追问，但不能访问本轮未开放的工具。
+采购模型可以看到并规划全部已注册采购工具，但调用后仍必须经过本轮 ToolPolicy 和 ToolExecutor 执行授权；未授权调用返回 `TOOL_NOT_ALLOWED`。General 模型看不到采购工具。
 
 ### 7.6 Model Adapter
 
@@ -423,16 +427,19 @@ AgentChatService 获取会话锁
 读取聊天历史和短期状态
   |
   v
-IntentService 识别意图
+RouteResolver 决定领域
+  |
+  v
+仅 Procurement 调用采购 Intent Resolver
   |
   v
 AgentService 构建 AgentContext
   |
   v
-Runner 根据 Scene/Intent/状态计算 allowed_tools
+Runtime 调用当前 Definition 的 ToolPolicy 计算 allowed_tools
   |
   v
-将目标、上下文、Skill 和工具 Schema 发送给模型
+将目标、上下文、Skill 和全部已注册采购工具 Schema 发送给采购模型
   |
   +-------------------------------+
   |                               |
@@ -459,7 +466,7 @@ Agent 循环必须具备最大迭代次数。
 
 达到上限时停止执行，不继续重复写入，并向用户说明流程暂停。
 
-## 9. Scene、Stage 和动态工具
+## 9. Scene、Stage 和工具 Policy
 
 ### 9.1 Scene
 
@@ -496,16 +503,17 @@ Stage 用于表示当前会话或采购事实所处阶段。
 
 正式状态必须以业务后端返回结果为准，不得仅根据模型文本修改 Stage。
 
-### 9.3 当前动态工具策略
+### 9.3 当前工具策略
 
-| 当前条件                | 开放工具                                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------------------- |
-| `GENERAL_QUERY`     | 不开放业务工具                                                                                                 |
-| 查看草稿、状态查询、确认提交或取消意图 | `get_requirement_detail`                                                                                |
-| 采购场景且当前没有活动草稿       | `create_requirement_draft`                                                                              |
-| 采购场景且已有活动草稿         | `get_requirement_detail`、`update_requirement_draft`、`start_new_requirement`、`switch_active_requirement` |
+| 当前条件 | 执行策略 |
+| --- | --- |
+| `GENERAL` 路由 | 不开放采购工具 |
+| `PROCUREMENT` 路由 | 默认允许全部已注册采购工具 |
+| 没有活动草稿 | 禁止 `update_requirement_draft` |
+| 用户未明确确认提交 | 禁止 `submit_requirement` |
+| 用户未明确确认取消或未提供原因 | 禁止 `cancel_requirement` |
 
-工具授权必须由代码生成，不能只依赖 System Prompt。
+三类高风险写操作的前置限制必须由 Policy 生成，不能只依赖 System Prompt。工具执行后仍由 Agent Tool 和 Business Service 校验身份、数据范围、状态、版本、幂等和审计要求。
 
 ## 10. 当前 Agent Tool 能力
 
@@ -518,18 +526,20 @@ Stage 用于表示当前会话或采购事实所处阶段。
 | `update_requirement_draft`  | 写      | 增量修改当前活动草稿                |
 | `start_new_requirement`     | 写      | 保留原草稿并创建另一张不同采购草稿         |
 | `switch_active_requirement` | 会话切换/读 | 切换到当前会话最近办理记录中的另一张草稿      |
+| `submit_requirement` | 写 | 用户明确确认且后端状态、版本、权限和幂等校验通过后提交审批 |
+| `cancel_requirement` | 写 | 用户明确确认并提供原因后取消当前草稿 |
+| `search_historical_suppliers` | 读 | 根据当前活动草稿查询可追溯的历史采购和供应商 |
+| `list_my_requirements` | 读 | 分页查询当前登录员工本人的采购申请 |
 
 ### 10.2 后端已存在但当前未开放为 Agent Tool
 
-| 能力       | 后端状态                | Agent Tool 状态 | 当前聊天能否执行 |
-| -------- | ------------------- | ------------- | -------- |
-| 正式提交审批   | 后端接口/Service 已设计或实现 | 未注册           | 否        |
-| 取消采购草稿   | 后端接口/Service 已设计或实现 | 未注册           | 否        |
-| 分页查询本人申请 | 后端接口/Service 已设计或实现 | 未注册           | 否        |
-| 历史供应商推荐  | 后端查询能力已设计或实现        | 未注册           | 否        |
-| 白名单检索    | 后续接入                | 未注册           | 否        |
-| 黑名单管理    | 后续接入                | 未注册           | 否        |
-| 审批操作     | 后续接入                | 未注册           | 否        |
+| 能力 | 后端状态 | Agent Tool 状态 | 当前聊天能否执行 |
+| --- | --- | --- | --- |
+| 白名单检索 | 后续接入 | 未注册 | 否 |
+| 黑名单管理 | 后续接入 | 未注册 | 否 |
+| 审批操作 | 后续接入 | 未注册 | 否 |
+| 采购下单 | 后续接入 | 未注册 | 否 |
+| 交付、验收和入库 | 后续接入 | 未注册 | 否 |
 
 后端能力、Agent Tool 和本轮动态授权是三个不同层次，文档和代码不得混为一谈。
 
@@ -537,7 +547,7 @@ Stage 用于表示当前会话或采购事实所处阶段。
 
 * Tool 实现；
 * Registry；
-* Runner 动态授权；
+* ToolPolicy 动态授权；
 * Backend Protocol；
 * Business Service Adapter；
 * Prompt；
@@ -645,10 +655,10 @@ Redis 中的数据不能替代 MySQL 中的采购详情。
 员工描述采购需求
   |
   v
-意图识别
+领域路由和采购意图识别
   |
   v
-Runner 判断当前没有活动草稿
+ToolPolicy 判断当前没有活动草稿
   |
   v
 模型调用 create_requirement_draft
@@ -727,7 +737,7 @@ switch_active_requirement
   -> 数据范围
   -> 当前后端状态
   -> 人工明确确认
-  -> 动态开放专用工具
+  -> Policy 允许高风险工具
   -> 工具参数校验
   -> 幂等检查
   -> version 检查
@@ -781,7 +791,9 @@ LLM 不得：
 * 绕过黑名单；
 * 把白名单关系解释为普遍强制采购关系。
 
-当前历史供应商推荐尚未注册为 Agent Tool，因此相关 Skill 不能被描述为聊天 Agent 当前已经可执行的能力。
+历史供应商推荐已经注册为只读 Agent Tool。只有当前会话存在活动采购草稿且
+`ProcurementToolPolicy` 本轮授权 `search_historical_suppliers` 时，模型才能调用；结果仅供参考，
+不得自动选择供应商、修改草稿或把历史价格描述为当前报价。
 
 ## 16. 一致性、事务和幂等
 
@@ -819,7 +831,7 @@ LLM 不得：
 ```text
 HTTP请求
 聊天回合
-意图识别
+领域路由/采购意图识别
 模型请求
 Tool Call
 Business Service
@@ -832,7 +844,7 @@ Agent Trace 至少记录：
 * `agent.started`；
 * 上下文准备完成；
 * 当前意图、Scene 和 Stage；
-* 本轮开放工具名称；
+* 模型可见工具名称和本轮允许执行工具名称；
 * 模型请求和完成耗时；
 * 工具请求和完成耗时；
 * 工具名称；
@@ -856,7 +868,7 @@ Trace 不记录：
 
 * HTTP 延迟和错误率；
 * Agent 回合延迟；
-* 意图识别延迟；
+* 领域路由和采购意图识别延迟；
 * 模型延迟和失败率；
 * 工具调用次数和失败率；
 * 迭代次数；
@@ -880,8 +892,8 @@ Trace 不记录：
 * 会话重置；
 * Anthropic 模型适配；
 * OpenAI 兼容模型适配；
-* Tool Calling Runner；
-* 动态工具授权；
+* AgentLoopRuntime Tool Calling 主循环；
+* 工具执行 Policy；
 * 工具参数校验；
 * 本轮重复写入阻断；
 * 采购草稿创建；
@@ -892,12 +904,10 @@ Trace 不记录：
 * 请求级 Agent Trace；
 * CLI 聊天入口。
 
+CLI 默认先调用 `/api/v1/auth/login`，使用 CookieJar 保存服务端 Session Cookie，再访问 Agent 聊天接口。密码通过安全输入或专用进程环境变量提供，不进入 URL、命令历史、日志或 Agent Prompt。开发身份 Header 仅作为显式本地兼容模式，不能用于采购写操作验收。
+
 当前 Agent 仍未开放：
 
-* 正式提交审批工具；
-* 取消草稿工具；
-* 本人申请列表查询工具；
-* 历史供应商推荐工具；
 * 白名单和黑名单工具；
 * 审批、订单、交付、验收和入库工具。
 
@@ -909,7 +919,28 @@ Trace 不记录：
 | ----------- | ---------------------------- | ----------------- |
 | M1 工程底座     | 应用、数据库、配置、日志、测试和 CI          | `/health`、空库迁移、CI |
 | M2 主数据和权限   | 产品、供应商、名单、历史、身份和审计           | 管理 API 和受控查询      |
-| M3 需求 Agent | 聊天会话、意图、Runner、草稿工具、完整性和推荐入口 | 多轮采购草稿            |
+| M3 需求 Agent | 聊天会话、领域路由、采购意图、AgentLoopRuntime、草稿工具、完整性和推荐入口 | 多轮采购草稿 |
 | M4 推荐和审批    | 推荐工具、正式提交工具、楼长审批             | 需求到审批通过           |
 | M5 采购闭环     | 订单、交付、验收、入库和黑名单治理            | 批准到完成             |
 | M6 集成上线     | 飞书、通知、部署和端到端验证               | 内网试运行             |
+## Agent Runtime 当前实现补充
+
+当前实现以 `RouteResolver -> ModelProcurementIntentResolver（仅采购） -> AgentService -> AgentLoopRuntime` 为唯一 Agent 执行链。`IntentCategory` 位于 `enums.py`，旧多策略 `IntentRecognizer` 已删除。`AgentDefinition` 组合领域、`PromptProvider`、`ToolPolicy` 和可选 Skill 选择器；旧 `ProcurementAgentRunner` 名称和兼容别名已删除。
+
+会话状态边界：`ChatStore` 只保存聊天历史、消息状态、会话锁、幂等键和 `active_route`；`ProcurementSessionStore` 保存活动采购草稿短期状态；MySQL 保存正式采购事实。原 `orchestrator.py` 已删除。
+
+生产环境中 ChatStore 与 ProcurementSessionStore 均装配异步 Redis 实现，使用独立键空间，键都包含 `organization_id + user_id + conversation_id`；内存实现只用于本地和测试。
+
+Memory/Knowledge 当前只预留只读 Provider 接口，不参与工具授权、权限判断、状态变更或正式事实写入。
+
+采购细粒度 Intent 仅用于兼容响应和采购上下文；历史上下文归一由 `RouteResolver` 完成。`ResponseGuard` 独立负责虚假提交/取消声明保护。Runtime 每轮开始前可调用只读 Memory/Knowledge Provider，异常安全降级为空结果，召回内容不改变 `allowed_tools`。
+
+Bootstrap 当前装配 General/Procurement 两个 `AgentDefinition`，采购 Skill 通过 `SkillManagerSelector` 注入；`AgentService.should_handle` 已删除，`RouteResolver` 是唯一领域路由入口。
+
+采购业务 Prompt 的唯一实现位于 `app/modules/agent/procurement/prompt.py`。`ProcurementPromptProvider` 负责采购状态序列化和已选择 Skill 的注入；`AgentLoopRuntime` 只依赖 `PromptProvider` 协议，不包含采购规则文本。
+
+会话重置同时清理 ChatStore 与 ProcurementSessionStore 的短期状态，不修改 MySQL 正式采购事实。
+
+聊天回合采用提交式状态边界：用户和助手消息先处于 `PROCESSING`，Route、采购 Session 和聊天幂等结果全部提交成功后才标记 `COMPLETED`。任一步失败时，本轮两条消息标记为 `FAILED`，Route 和采购 Session 恢复到回合开始前状态。跨 Store 重置为幂等可重试操作，局部失败不保存成功幂等结果，重试后收敛到两个 Store 均已清理。
+
+CI 启动真实 Redis Service，验证 ChatStore 和 ProcurementSessionStore 的序列化、TTL、组织隔离与清理；单元测试中的 Mock 只用于装配和异常注入。

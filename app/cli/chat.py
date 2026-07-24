@@ -1,19 +1,23 @@
 """Interactive HTTP client for the procurement Agent chat API."""
 
 import argparse
+import getpass
 import json
+import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from http.cookiejar import CookieJar
 from typing import Any, TextIO
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, OpenerDirector, Request, build_opener
 from uuid import uuid4
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
-DEFAULT_USER_CODE = "DEV-E0001"
+DEFAULT_IDENTIFIER = "DEV-E0001"
 DEFAULT_ROLES = "EMPLOYEE"
 DEFAULT_TIMEOUT_SECONDS = 90.0
+PASSWORD_ENV_NAME = "PROCUREMENT_AGENT_CLI_PASSWORD"
 
 
 class AgentCliError(RuntimeError):
@@ -25,14 +29,28 @@ class AgentApiClient:
         self,
         *,
         base_url: str = DEFAULT_BASE_URL,
-        user_code: str = DEFAULT_USER_CODE,
+        dev_user_code: str = DEFAULT_IDENTIFIER,
         roles: str = DEFAULT_ROLES,
+        use_dev_headers: bool = False,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        opener: OpenerDirector | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
-        self._user_code = user_code
+        self._dev_user_code = dev_user_code
         self._roles = roles
+        self._use_dev_headers = use_dev_headers
         self._timeout_seconds = timeout_seconds
+        self._cookie_jar = CookieJar()
+        self._opener = opener or build_opener(HTTPCookieProcessor(self._cookie_jar))
+
+    def login(self, identifier: str, password: str) -> dict[str, Any]:
+        payload = self._request(
+            "POST",
+            "/api/v1/auth/login",
+            body={"identifier": identifier, "password": password},
+        )
+        data = _object(payload.get("data"), "登录接口返回了无效数据")
+        return _object(data.get("user"), "登录接口没有返回员工信息")
 
     def send_message(self, conversation_id: str, content: str) -> dict[str, Any]:
         payload = self._request(
@@ -74,11 +92,10 @@ class AgentApiClient:
         body: Mapping[str, object] | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        headers = {
-            "Accept": "application/json",
-            "X-User-Code": self._user_code,
-            "X-User-Roles": self._roles,
-        }
+        headers = {"Accept": "application/json"}
+        if self._use_dev_headers:
+            headers["X-User-Code"] = self._dev_user_code
+            headers["X-User-Roles"] = self._roles
         encoded_body = None
         if body is not None:
             encoded_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -93,7 +110,7 @@ class AgentApiClient:
             method=method,
         )
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:
+            with self._opener.open(request, timeout=self._timeout_seconds) as response:
                 raw = response.read()
         except HTTPError as exc:
             raise AgentCliError(_http_error_message(exc)) from None
@@ -231,8 +248,19 @@ def _configure_utf8(streams: Sequence[TextIO] = (sys.stdin, sys.stdout, sys.stde
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="采购 Agent 交互式命令行客户端")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Agent API 根地址")
-    parser.add_argument("--user-code", default=DEFAULT_USER_CODE, help="内部员工号")
-    parser.add_argument("--roles", default=DEFAULT_ROLES, help="逗号分隔的角色")
+    parser.add_argument(
+        "--identifier",
+        "--user-code",
+        dest="identifier",
+        default=DEFAULT_IDENTIFIER,
+        help="登录工号或电话；--user-code 作为兼容别名保留",
+    )
+    parser.add_argument(
+        "--dev-headers",
+        action="store_true",
+        help="仅本地调试：跳过登录并使用开发身份 Header",
+    )
+    parser.add_argument("--roles", default=DEFAULT_ROLES, help="开发身份 Header 的逗号分隔角色")
     parser.add_argument("--conversation-id", help="复用指定会话 ID")
     parser.add_argument(
         "--timeout",
@@ -250,10 +278,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         build_parser().error("--timeout 必须大于 0")
     client = AgentApiClient(
         base_url=args.base_url,
-        user_code=args.user_code,
+        dev_user_code=args.identifier,
         roles=args.roles,
+        use_dev_headers=args.dev_headers,
         timeout_seconds=args.timeout,
     )
+    if not args.dev_headers:
+        password = os.getenv(PASSWORD_ENV_NAME)
+        if password is None:
+            password = getpass.getpass(f"密码（{args.identifier}）: ")
+        try:
+            user = client.login(args.identifier, password)
+        except AgentCliError as exc:
+            print(f"登录失败：{exc}")
+            return 1
+        building_ids = user.get("building_ids") or []
+        print(
+            "登录成功："
+            f"{user.get('name') or user.get('employee_no') or args.identifier} "
+            f"楼宇={','.join(str(item) for item in building_ids) or '未配置'}"
+        )
     run_chat(client, conversation_id=args.conversation_id)
     return 0
 

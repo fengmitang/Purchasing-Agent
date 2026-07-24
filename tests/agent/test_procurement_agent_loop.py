@@ -10,8 +10,7 @@ except ModuleNotFoundError:
     sys.modules["anthropic"] = anthropic_stub
 
 from app.modules.agent.bootstrap import build_procurement_agent_service
-from app.modules.agent.enums import AgentScene, AgentStage
-from app.modules.agent.intent_recognizer import IntentCategory
+from app.modules.agent.enums import AgentScene, AgentStage, IntentCategory
 from app.modules.agent.model import AgentModelResponse, AgentToolCall
 from app.modules.agent.procurement.schemas import (
     HistoricalSupplierRecommendationResult,
@@ -22,6 +21,18 @@ from app.modules.agent.procurement.schemas import (
 )
 from app.modules.agent.procurement.session_store import InMemoryProcurementSessionStore
 from app.shared.identity import CurrentUser
+
+REGISTERED_PROCUREMENT_TOOLS = {
+    "create_requirement_draft",
+    "get_requirement_detail",
+    "update_requirement_draft",
+    "start_new_requirement",
+    "switch_active_requirement",
+    "submit_requirement",
+    "cancel_requirement",
+    "search_historical_suppliers",
+    "list_my_requirements",
+}
 
 
 def draft_detail(**changes):
@@ -196,7 +207,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(backend.create_calls))
         self.assertEqual("session-001", backend.create_calls[0][0]["session_id"])
         self.assertEqual("CNY", backend.create_calls[0][0]["currency"])
-        self.assertEqual(501, store.get("employee-1", "session-001").requirement_id)
+        self.assertEqual(501, (await store.get(0, "employee-1", "session-001")).requirement_id)
         self.assertEqual(AgentStage.WAITING_FOR_CLARIFICATION, result.stage)
         self.assertIn("请补充", result.response)
         event_names = [item["event"] for item in result.trace]
@@ -234,7 +245,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_tool_gets_latest_version_and_only_sends_changes(self):
         backend = FakeBackend(draft_detail(version=7))
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state(version=1))
+        await store.save(0, "employee-1", "session-001", self._state(version=1))
         model = QueueModel(
             tool_decision(
                 "update_requirement_draft",
@@ -258,7 +269,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_write_in_same_turn_is_blocked(self):
         backend = FakeBackend(draft_detail(version=3))
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state(version=3))
+        await store.save(0, "employee-1", "session-001", self._state(version=3))
         arguments = {"changes": {"quantity": "3"}, "clear_fields": []}
         calls = [
             AgentToolCall(id="write-1", name="update_requirement_draft", arguments=arguments),
@@ -292,10 +303,28 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("没有可执行", result.response)
         self.assertIn("TOOL_NOT_ALLOWED", model.calls[1]["messages"][-1]["content"][0]["content"])
 
+    async def test_visible_registered_tool_is_still_blocked_when_policy_denies_execution(self):
+        backend = FakeBackend()
+        model = QueueModel(
+            tool_decision("submit_requirement", {}),
+            AgentModelResponse(text="当前没有可提交的采购草稿。"),
+        )
+        service, _ = self.make_service(backend, model)
+
+        await self.call(service, IntentCategory.CREATE_REQUIREMENT, "我要采购服务器")
+
+        visible = {item["name"] for item in model.calls[0]["tools"]}
+        self.assertEqual(REGISTERED_PROCUREMENT_TOOLS, visible)
+        self.assertEqual([], backend.submit_calls)
+        self.assertIn(
+            "TOOL_NOT_ALLOWED",
+            model.calls[1]["messages"][-1]["content"][0]["content"],
+        )
+
     async def test_confirmation_without_submit_call_cannot_claim_submission(self):
         backend = FakeBackend(draft_detail(missing_fields=[], conflicts=[]))
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(
             tool_decision("get_requirement_detail", {}),
             AgentModelResponse(text="采购需求已成功提交。"),
@@ -309,14 +338,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("成功提交", result.response)
         self.assertIn("尚未正式提交", result.response)
         available = {item["name"] for item in model.calls[0]["tools"]}
-        self.assertEqual(
-            {
-                "get_requirement_detail",
-                "update_requirement_draft",
-                "submit_requirement",
-            },
-            available,
-        )
+        self.assertEqual(REGISTERED_PROCUREMENT_TOOLS, available)
         system_prompt = model.calls[0]["system"]
         self.assertIn(
             "提交审批必填字段仅包括application_reason、application_location、product_name、quantity",
@@ -327,11 +349,13 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
             system_prompt,
         )
         self.assertIn("当前提交所需信息已经完整，可以提交审批", system_prompt)
+        self.assertIn("不能把历史供应商描述成白名单供应商", system_prompt)
+        self.assertIn("不得声称工具不存在", system_prompt)
 
     async def test_cancellation_without_tool_call_cannot_claim_state_change(self):
         backend = FakeBackend(draft_detail())
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(AgentModelResponse(text="采购需求已经取消。"))
         service, _ = self.make_service(backend, model, store)
 
@@ -340,12 +364,12 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("已经取消", result.response)
         self.assertIn("没有执行成功", result.response)
         available = {item["name"] for item in model.calls[0]["tools"]}
-        self.assertEqual({"get_requirement_detail", "cancel_requirement"}, available)
+        self.assertEqual(REGISTERED_PROCUREMENT_TOOLS, available)
 
     async def test_mixed_update_then_submit_succeeds_in_one_turn(self):
         backend = FakeBackend(draft_detail(missing_fields=["supplier_name"], conflicts=[]))
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(
             AgentModelResponse(
                 tool_calls=[
@@ -383,7 +407,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_with_reason_and_confirmation_succeeds(self):
         backend = FakeBackend(draft_detail())
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(
             tool_decision(
                 "cancel_requirement",
@@ -406,7 +430,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_tool_cannot_invent_explicit_confirmation(self):
         backend = FakeBackend(draft_detail())
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(
             tool_decision(
                 "cancel_requirement",
@@ -425,12 +449,12 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], backend.cancel_calls)
         self.assertIn("确认", result.response)
         tool_result = model.calls[1]["messages"][-1]["content"][0]["content"]
-        self.assertIn("EXPLICIT_CONFIRMATION_REQUIRED", tool_result)
+        self.assertIn("TOOL_NOT_ALLOWED", tool_result)
 
     async def test_deferred_field_is_saved_without_database_patch(self):
         backend = FakeBackend(draft_detail())
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(
             tool_decision(
                 "update_requirement_draft",
@@ -447,12 +471,15 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual([], backend.update_calls)
-        self.assertEqual(["specification"], store.get("employee-1", "session-001").deferred_fields)
+        self.assertEqual(
+            ["specification"],
+            (await store.get(0, "employee-1", "session-001")).deferred_fields,
+        )
 
-    async def test_recommendation_and_list_intents_only_expose_read_tools(self):
+    async def test_procurement_intents_expose_all_registered_tools_to_model(self):
         backend = FakeBackend(draft_detail())
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(
             tool_decision("search_historical_suppliers", {"limit": 5}),
             AgentModelResponse(text="暂无历史匹配。"),
@@ -467,10 +494,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
             "推荐这个草稿的历史供应商",
         )
         recommendation_tools = {item["name"] for item in model.calls[0]["tools"]}
-        self.assertEqual(
-            {"get_requirement_detail", "search_historical_suppliers"},
-            recommendation_tools,
-        )
+        self.assertEqual(REGISTERED_PROCUREMENT_TOOLS, recommendation_tools)
         self.assertEqual(1, len(backend.search_calls))
 
         await self.call(
@@ -480,13 +504,13 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
             request_id="req-list",
         )
         list_tools = {item["name"] for item in model.calls[2]["tools"]}
-        self.assertEqual({"list_my_requirements"}, list_tools)
+        self.assertEqual(REGISTERED_PROCUREMENT_TOOLS, list_tools)
         self.assertEqual(1, len(backend.list_calls))
 
     async def test_agent_stops_at_iteration_limit(self):
         backend = FakeBackend()
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(
             tool_decision("get_requirement_detail", {}, "read-1"),
             tool_decision("get_requirement_detail", {}, "read-2"),
@@ -499,7 +523,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_short_answer_with_session_becomes_supplement(self):
         backend = FakeBackend()
         store = InMemoryProcurementSessionStore()
-        store.save("employee-1", "session-001", self._state())
+        await store.save(0, "employee-1", "session-001", self._state())
         model = QueueModel(AgentModelResponse(text="已理解你补充的是使用地点，请确认具体机房。"))
         service, _ = self.make_service(backend, model, store)
         result = await self.call(service, IntentCategory.UNKNOWN, "2号楼")
@@ -534,7 +558,8 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         )
         backend = MultiDraftBackend(old_detail, new_detail)
         store = InMemoryProcurementSessionStore()
-        store.save(
+        await store.save(
+            0,
             "employee-1",
             "session-001",
             ProcurementSessionState(
@@ -570,7 +595,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
             IntentCategory.CREATE_REQUIREMENT,
             "这是另一个需求：4号楼采购4个冷却塔电机轴承",
         )
-        first_state = store.get("employee-1", "session-001")
+        first_state = await store.get(0, "employee-1", "session-001")
         self.assertEqual(502, first_state.requirement_id)
         self.assertEqual([501], [item.requirement_id for item in first_state.recent_requirements])
         self.assertEqual(1, len(backend.create_calls))
@@ -584,23 +609,11 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
             "切回MOCK-PR-1006",
             request_id="req-switch",
         )
-        second_state = store.get("employee-1", "session-001")
+        second_state = await store.get(0, "employee-1", "session-001")
         self.assertEqual(501, second_state.requirement_id)
         self.assertEqual([502], [item.requirement_id for item in second_state.recent_requirements])
         self.assertIn("已切回", second.response)
         self.assertEqual(501, backend.get_calls[-1][0])
-
-    def test_unknown_without_procurement_context_stays_outside_agent(self):
-        backend = FakeBackend()
-        service, _ = self.make_service(backend, QueueModel())
-        self.assertFalse(
-            service.should_handle(
-                IntentCategory.UNKNOWN,
-                "employee-1",
-                "session-001",
-                history=[{"role": "user", "content": "你好"}],
-            )
-        )
 
     def test_old_redis_state_is_compatible(self):
         state = ProcurementSessionState.model_validate(

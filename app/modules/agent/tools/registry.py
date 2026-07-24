@@ -13,5 +13,8 @@ class ToolRegistry:
     def get(self, name: str) -> AgentTool | None:
         return self._tools.get(name)
 
-    def schemas(self, allowed_names: set[str]) -> list[dict]:
-        return [tool.llm_schema() for name, tool in self._tools.items() if name in allowed_names]
+    def names(self) -> set[str]:
+        return set(self._tools)
+
+    def schemas(self, visible_names: set[str]) -> list[dict]:
+        return [tool.llm_schema() for name, tool in self._tools.items() if name in visible_names]

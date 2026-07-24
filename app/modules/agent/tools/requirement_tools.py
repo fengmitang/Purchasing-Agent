@@ -6,6 +6,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.agent.context import AgentContext
 from app.modules.agent.enums import AgentStage
+from app.modules.agent.policies import (
+    has_cancel_reason,
+    has_explicit_cancel_confirmation,
+    has_explicit_submit_confirmation,
+)
 from app.modules.agent.procurement.idempotency import update_idempotency_key
 from app.modules.agent.procurement.protocols import RequirementBackendProtocol
 from app.modules.agent.procurement.schemas import (
@@ -416,9 +421,7 @@ class SubmitRequirementTool(AgentTool):
     async def execute(
         self, context: AgentContext, arguments: SubmitRequirementInput
     ) -> ToolExecutionResult:
-        from app.modules.agent.intent_recognizer import IntentCategory
-
-        if context.intent != IntentCategory.CONFIRM_SUBMISSION:
+        if not has_explicit_submit_confirmation(context):
             return ToolExecutionResult(
                 success=False,
                 code="EXPLICIT_CONFIRMATION_REQUIRED",
@@ -492,16 +495,17 @@ class CancelRequirementTool(AgentTool):
     async def execute(
         self, context: AgentContext, arguments: CancelRequirementInput
     ) -> ToolExecutionResult:
-        from app.modules.agent.intent_recognizer import IntentCategory
-
-        explicit_confirmation = any(
-            phrase in context.message for phrase in ("确认取消", "确认撤销", "确定取消", "确定撤销")
-        )
-        if context.intent != IntentCategory.CANCEL_REQUIREMENT or not explicit_confirmation:
+        if not has_explicit_cancel_confirmation(context):
             return ToolExecutionResult(
                 success=False,
                 code="EXPLICIT_CONFIRMATION_REQUIRED",
                 message="只有用户本轮明确确认取消时才能取消草稿。",
+            )
+        if not has_cancel_reason(context):
+            return ToolExecutionResult(
+                success=False,
+                code="CANCELLATION_REASON_REQUIRED",
+                message="取消采购草稿必须由用户提供明确原因。",
             )
         state = context.procurement_state
         if state is None:

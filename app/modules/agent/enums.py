@@ -1,4 +1,19 @@
-from enum import StrEnum
+from enum import Enum, StrEnum
+
+
+class IntentCategory(Enum):
+    """与当前 Agent—采购后端接口契约一致的采购意图。"""
+
+    CREATE_REQUIREMENT = "create_requirement"
+    SUPPLEMENT_REQUIREMENT = "supplement_requirement"
+    MODIFY_REQUIREMENT = "modify_requirement"
+    VIEW_REQUIREMENT = "view_requirement"
+    CONFIRM_SUBMISSION = "confirm_submission"
+    CANCEL_REQUIREMENT = "cancel_requirement"
+    QUERY_STATUS = "query_status"
+    LIST_REQUIREMENTS = "list_requirements"
+    SEARCH_HISTORICAL_SUPPLIERS = "search_historical_suppliers"
+    UNKNOWN = "unknown"
 
 
 class AgentScene(StrEnum):
