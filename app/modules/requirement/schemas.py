@@ -22,17 +22,23 @@ def _integer_quantity(value: Decimal) -> Decimal:
     return value
 
 
-Quantity = Annotated[
-    Decimal,
-    BeforeValidator(_decimal_string),
-    AfterValidator(_integer_quantity),
-    Field(gt=0, max_digits=18, decimal_places=4),
-] | None
-Money = Annotated[
-    Decimal,
-    BeforeValidator(_decimal_string),
-    Field(ge=0, max_digits=18, decimal_places=2),
-] | None
+Quantity = (
+    Annotated[
+        Decimal,
+        BeforeValidator(_decimal_string),
+        AfterValidator(_integer_quantity),
+        Field(gt=0, max_digits=18, decimal_places=4),
+    ]
+    | None
+)
+Money = (
+    Annotated[
+        Decimal,
+        BeforeValidator(_decimal_string),
+        Field(ge=0, max_digits=18, decimal_places=2),
+    ]
+    | None
+)
 PositiveId = Annotated[int, Field(gt=0)]
 
 
