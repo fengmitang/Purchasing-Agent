@@ -24,8 +24,8 @@ def approval_task() -> ApprovalTaskView:
         status="PENDING_APPROVAL",
         version=2,
         revision_no=1,
-        building_id=1,
-        building_name="A1 数据中心",
+        building_id=None,
+        building_name=None,
         applicant=WorkflowApplicant(
             employee_id=11, employee_no="DEV-E0001", name="测试员工", phone="13800000001"
         ),
@@ -98,7 +98,7 @@ class StubWorkflowService:
 
     async def get_approval_task(self, requirement_id, actor):
         assert requirement_id == 101
-        assert 1 in actor.building_ids
+        assert "BUILDING_MANAGER" in actor.roles
         return approval_task()
 
     async def decide(self, requirement_id, command, context):
@@ -151,7 +151,6 @@ def test_manager_can_list_open_and_approve_tasks() -> None:
         CurrentUser(
             user_code="DEV-A0001",
             roles=frozenset({"EMPLOYEE", "BUILDING_MANAGER"}),
-            building_ids=frozenset({1}),
         )
     )
 
@@ -165,7 +164,7 @@ def test_manager_can_list_open_and_approve_tasks() -> None:
 
     assert listed.status_code == 200
     assert listed.json()["page"]["total"] == 1
-    assert detail.json()["data"]["building_name"] == "A1 数据中心"
+    assert detail.json()["data"]["building_name"] is None
     assert approved.status_code == 200
     assert approved.json()["data"]["status"] == "APPROVED"
 
@@ -176,7 +175,6 @@ def test_manager_can_query_own_approval_history() -> None:
             user_code="DEV-A0001",
             roles=frozenset({"EMPLOYEE", "BUILDING_MANAGER"}),
             employee_id=61,
-            building_ids=frozenset({1}),
         )
     )
 

@@ -44,13 +44,12 @@ class WorkflowRepository:
     async def list_approval_tasks(
         self,
         *,
-        building_ids: frozenset[int],
         approver_id: int,
         view: str,
         page: int,
         page_size: int,
-    ) -> tuple[list[tuple[PurchaseRequirement, Building, PurchaseApproval | None]], int]:
-        filters = [PurchaseRequirement.building_id.in_(building_ids)]
+    ) -> tuple[list[tuple[PurchaseRequirement, Building | None, PurchaseApproval | None]], int]:
+        filters = []
         if view == "pending":
             filters.append(PurchaseRequirement.status == "PENDING_APPROVAL")
             approval_join = PurchaseApproval.requirement_id == -1
@@ -66,7 +65,7 @@ class WorkflowRepository:
         )
         rows = await self._session.execute(
             select(PurchaseRequirement, Building, PurchaseApproval)
-            .join(Building, Building.id == PurchaseRequirement.building_id)
+            .outerjoin(Building, Building.id == PurchaseRequirement.building_id)
             .outerjoin(PurchaseApproval, approval_join)
             .where(*filters)
             .order_by(*order_by)
@@ -89,10 +88,10 @@ class WorkflowRepository:
 
     async def get_requirement_with_building(
         self, requirement_id: int
-    ) -> tuple[PurchaseRequirement, Building] | None:
+    ) -> tuple[PurchaseRequirement, Building | None] | None:
         row = await self._session.execute(
             select(PurchaseRequirement, Building)
-            .join(Building, Building.id == PurchaseRequirement.building_id)
+            .outerjoin(Building, Building.id == PurchaseRequirement.building_id)
             .where(PurchaseRequirement.id == requirement_id)
         )
         return row.tuples().first()

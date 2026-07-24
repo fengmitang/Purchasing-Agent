@@ -4,6 +4,7 @@ import {
   DeleteOutlined,
   FileTextOutlined,
   RobotOutlined,
+  SaveOutlined,
   SendOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -45,6 +46,7 @@ const fieldNames: Record<string, string> = {
   currency: "币种",
 };
 const requiredFieldCount = 4;
+type FieldRequirement = "required" | "optional" | "calculated";
 
 const quickPrompts = [
   "我要采购 2 台机架式服务器，用于新建测试环境",
@@ -69,6 +71,15 @@ function display(value: string | number | null | undefined) {
   return value == null || value === "" ? "待补充" : String(value);
 }
 
+function summaryLabel(label: string, requirement: FieldRequirement) {
+  const text = requirement === "required" ? "必填" : requirement === "optional" ? "选填" : "自动";
+  return <span className="summary-field-label"><span>{label}</span><span className={`field-mark is-${requirement}`}>{text}</span></span>;
+}
+
+function requirementStorageKey(storagePrefix: string, conversationId: string) {
+  return `${storagePrefix}:conversation:${conversationId}:requirement`;
+}
+
 interface AgentChatPageProps {
   user: CurrentUser;
   onOpenRequirement: (requirementId: number) => void;
@@ -85,38 +96,59 @@ export function AgentChatPage({ user, onOpenRequirement, onSubmitted }: AgentCha
   const [draft, setDraft] = useState<RequirementDetail | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [loadingDraft, setLoadingDraft] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
+  const activeConversationRef = useRef(conversationId);
 
-  const loadDraft = useCallback(async (requirementId: number) => {
+  const loadDraft = useCallback(async (requirementId: number, sourceConversationId = conversationId) => {
     setLoadingDraft(true);
     try {
       const detail = await api.getDetail(user.employee_no, requirementId);
+      if (activeConversationRef.current !== sourceConversationId) return;
       setDraft(detail);
-      localStorage.setItem(`${storagePrefix}:requirement`, String(requirementId));
+      localStorage.setItem(
+        requirementStorageKey(storagePrefix, sourceConversationId),
+        String(requirementId),
+      );
     } catch (error) {
       message.error((error as Error).message);
     } finally {
-      setLoadingDraft(false);
+      if (activeConversationRef.current === sourceConversationId) setLoadingDraft(false);
     }
-  }, [message, storagePrefix, user.employee_no]);
+  }, [conversationId, message, storagePrefix, user.employee_no]);
 
   useEffect(() => {
+    activeConversationRef.current = conversationId;
     localStorage.setItem(`${storagePrefix}:conversation`, conversationId);
+    localStorage.removeItem(`${storagePrefix}:requirement`);
     let alive = true;
+    setMessages([]);
+    setDraft(null);
+    setLoadingDraft(false);
     setLoadingHistory(true);
     api.listAgentMessages(conversationId)
-      .then((result) => { if (alive) setMessages(result.data); })
+      .then((result) => {
+        if (!alive) return;
+        setMessages(result.data);
+        const storageKey = requirementStorageKey(storagePrefix, conversationId);
+        const requirementId = Number(localStorage.getItem(storageKey));
+        if (!result.data.length) {
+          localStorage.removeItem(storageKey);
+          setDraft(null);
+          return;
+        }
+        if (requirementId > 0) void loadDraft(requirementId, conversationId);
+      })
       .catch((error) => { if (alive) message.error((error as Error).message); })
       .finally(() => { if (alive) setLoadingHistory(false); });
-    const requirementId = Number(localStorage.getItem(`${storagePrefix}:requirement`));
-    if (requirementId > 0) void loadDraft(requirementId);
     return () => { alive = false; };
   }, [conversationId, loadDraft, message, storagePrefix]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const container = chatMessagesRef.current;
+    if (container) container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
   const completion = useMemo(() => {
@@ -171,6 +203,7 @@ export function AgentChatPage({ user, onOpenRequirement, onSubmitted }: AgentCha
       async onOk() {
         await api.resetAgentConversation(conversationId);
         const nextId = createConversationId();
+        localStorage.removeItem(requirementStorageKey(storagePrefix, conversationId));
         localStorage.removeItem(`${storagePrefix}:requirement`);
         localStorage.setItem(`${storagePrefix}:conversation`, nextId);
         setMessages([]);
@@ -211,6 +244,24 @@ export function AgentChatPage({ user, onOpenRequirement, onSubmitted }: AgentCha
     });
   }
 
+  async function saveDraftFromSummary() {
+    if (!draft || savingDraft) return;
+    setSavingDraft(true);
+    try {
+      const latest = await api.getDetail(user.employee_no, draft.requirement_id);
+      setDraft(latest);
+      localStorage.setItem(
+        requirementStorageKey(storagePrefix, conversationId),
+        String(latest.requirement_id),
+      );
+      message.success(`采购草稿 ${latest.requirement_no} 已保存`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
   const canSubmit = Boolean(
     draft &&
     draft.status === "DRAFT" &&
@@ -242,7 +293,7 @@ export function AgentChatPage({ user, onOpenRequirement, onSubmitted }: AgentCha
             <Text type="secondary">所有正式数据以后端草稿为准</Text>
           </div>
 
-          <div className="chat-messages" aria-live="polite">
+          <div className="chat-messages" aria-live="polite" ref={chatMessagesRef}>
             {loadingHistory ? <Skeleton active paragraph={{ rows: 5 }} /> : messages.length === 0 ? (
               <div className="chat-welcome">
                 <Avatar size={56} icon={<RobotOutlined />} className="assistant-avatar" />
@@ -275,7 +326,6 @@ export function AgentChatPage({ user, onOpenRequirement, onSubmitted }: AgentCha
                 <div className="chat-bubble typing-bubble"><i /><i /><i /></div>
               </div>
             )}
-            <div ref={chatEndRef} />
           </div>
 
           <div className="chat-composer">
@@ -336,23 +386,30 @@ export function AgentChatPage({ user, onOpenRequirement, onSubmitted }: AgentCha
                 <Alert type="error" showIcon message="有信息需要确认" description={draft.conflicts.map((item) => item.message).join("；")} />
               )}
               <Descriptions column={1} size="small" className="draft-descriptions">
-                <Descriptions.Item label="使用地点">{display(draft.application_location)}</Descriptions.Item>
-                <Descriptions.Item label="采购设备">{display(draft.product_full_name || draft.product_name)}</Descriptions.Item>
-                <Descriptions.Item label="品牌 / 型号">{[draft.brand, draft.model].filter(Boolean).join(" / ") || "待补充"}</Descriptions.Item>
-                <Descriptions.Item label="规格参数">{display(draft.specification)}</Descriptions.Item>
-                <Descriptions.Item label="数量">{draft.quantity ? `${draft.quantity} ${draft.unit || ""}` : "待补充"}</Descriptions.Item>
-                <Descriptions.Item label="供应商">{display(draft.supplier_name)}</Descriptions.Item>
-                <Descriptions.Item label="参考单价">{money(draft.unit_price, draft.currency)}</Descriptions.Item>
-                <Descriptions.Item label="预计总价"><strong className="total-money">{money(draft.total_amount, draft.currency)}</strong></Descriptions.Item>
-                <Descriptions.Item label="申请原因">{display(draft.application_reason)}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("使用地点", "required")}>{display(draft.application_location)}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("设备名称", "required")}>{display(draft.product_name)}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("设备类型", "optional")}>{display(draft.device_type)}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("具体全称", "optional")}>{display(draft.product_full_name)}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("品牌 / 型号", "optional")}>{[draft.brand, draft.model].filter(Boolean).join(" / ") || "待补充"}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("规格参数", "optional")}>{display(draft.specification)}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("数量", "required")}>{draft.quantity ? `${draft.quantity} ${draft.unit || ""}` : "待补充"}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("供应商", "optional")}>{display(draft.supplier_name)}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("参考单价", "optional")}>{money(draft.unit_price, draft.currency)}</Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("预计总价", "calculated")}><strong className="total-money">{money(draft.total_amount, draft.currency)}</strong></Descriptions.Item>
+                <Descriptions.Item label={summaryLabel("申请原因", "required")}>{display(draft.application_reason)}</Descriptions.Item>
               </Descriptions>
               {draft.status === "PENDING_APPROVAL" ? (
                 <Alert type="success" showIcon icon={<CheckCircleFilled />} message="已提交审批" description="申请已经进入楼长审批流程。" />
               ) : (
                 <Space direction="vertical" className="submit-area" size={10}>
-                  <Button type="primary" size="large" block icon={<CheckCircleOutlined />} disabled={!canSubmit} onClick={confirmSubmission}>
-                    核对无误，提交审批
-                  </Button>
+                  <Flex gap={10} className="draft-actions">
+                    <Button size="large" block icon={<SaveOutlined />} loading={savingDraft} onClick={() => void saveDraftFromSummary()}>
+                      保存草稿
+                    </Button>
+                    <Button type="primary" size="large" block icon={<CheckCircleOutlined />} disabled={!canSubmit} onClick={confirmSubmission}>
+                      提交审批
+                    </Button>
+                  </Flex>
                   <Text type="secondary">提交前请逐项核对；如需修改，直接在左侧对话中说明。</Text>
                 </Space>
               )}

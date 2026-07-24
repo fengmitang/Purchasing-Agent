@@ -549,7 +549,7 @@ Agent抽取：
 | submitted_at | DATETIME(6) | 否 | 当前版本提交审批时间 |
 | revision_no | INT | 是 | 版本号，默认 1 |
 | previous_requirement_id | BIGINT UNSIGNED | 否 | 上一版本申请外键 |
-| building_id | BIGINT UNSIGNED | 否 | 所属楼宇外键；由系统根据登录账号的唯一有效楼宇自动写入 |
+| building_id | BIGINT UNSIGNED | 否 | 所属楼宇外键；当前新建申请暂时允许为空且不填写 |
 | category_id | BIGINT UNSIGNED | 否 | 产品分类外键 |
 | category_name | VARCHAR(100) | 否 | 兼容历史数据的分类名称快照；新建申请无需填写 |
 | application_reason | TEXT | 否 | 采购原因；提交审批前必填 |
@@ -730,7 +730,7 @@ Agent抽取：
 `role` 保存系统角色字典，初始角色为：
 
 - `EMPLOYEE`：普通员工，可创建和查看本人采购申请；
-- `BUILDING_MANAGER`：楼长（专业工程师），可处理职责楼宇内的待审批申请；
+- `BUILDING_MANAGER`：楼长（专业工程师），可处理全部员工的待审批申请；
 - `PURCHASER`：采购员，可处理审批通过后的采购任务；
 - `ADMIN`：系统管理员，可管理账号、角色和基础数据。
 
@@ -755,7 +755,9 @@ Agent抽取：
 
 ### 8.5 building 与 employee_building_role
 
-`building` 保存楼宇编码、名称和启用状态。`employee_building_role` 保存员工在某一楼宇内的职责角色及有效期。楼长只能查询和审批本表中分配给自己的楼宇，禁止审批本人申请；采购员的全局业务角色由 `user_role` 控制。采购申请后续需关联 `building_id`，提交审批时据此创建楼长审批任务。
+`building` 保存楼宇编码、名称和启用状态。`employee_building_role` 保留员工楼宇职责及有效期，
+但当前审批队列不使用该范围过滤；所有楼长均可查询和审批全部员工的待审批申请，测试阶段暂时允许审批本人申请。
+采购员的全局业务角色由 `user_role` 控制。采购申请的 `building_id` 当前允许为空。
 
 ### 8.6 登录与权限规则
 

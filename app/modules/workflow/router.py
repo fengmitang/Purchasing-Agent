@@ -38,7 +38,7 @@ def _context(request: Request, actor: CurrentUser, key: str) -> AuditContext:
     "",
     response_model=SuccessResponse[list[BuildingOption]],
     summary="查询有效楼宇",
-    description="返回有效楼宇主数据。采购申请的所属楼宇由系统根据当前登录账号自动写入，不由员工选择。",
+    description="返回有效楼宇主数据；当前新建采购申请表单暂不使用所属楼宇。",
 )
 async def list_buildings(
     request: Request,
@@ -56,7 +56,7 @@ async def list_buildings(
     "/tasks",
     response_model=PaginatedResponse[ApprovalTaskView],
     summary="查询待审批任务或本人审批记录",
-    description="pending 返回职责楼宇内待处理申请；history 返回当前楼长本人已经处理过的审批记录。",
+    description="pending 返回全部员工的待处理申请；history 返回当前楼长本人已经处理过的审批记录。",
 )
 async def list_approval_tasks(
     request: Request,
@@ -100,7 +100,7 @@ async def get_approval_task(
     "/tasks/{requirement_id}/decision",
     response_model=SuccessResponse[ApprovalDecisionResult],
     summary="通过或驳回采购申请",
-    description="楼长只能审批职责楼宇内的申请，禁止审批本人申请；驳回时必须填写审批意见。",
+    description="楼长可以审批任意员工提交的待审批申请，包括本人申请；驳回时必须填写审批意见。",
 )
 async def decide_approval(
     requirement_id: int,
