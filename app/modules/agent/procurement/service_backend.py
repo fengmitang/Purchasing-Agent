@@ -3,8 +3,20 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.modules.agent.procurement.backend_client import ProcurementBackendError
-from app.modules.agent.procurement.schemas import RequirementDetail
-from app.modules.requirement.schemas import CreateRequirementDraft, UpdateRequirementDraft
+from app.modules.agent.procurement.schemas import (
+    HistoricalSupplierRecommendationResult,
+    RequirementDetail,
+    RequirementListResult,
+    RequirementSubmissionResult,
+    RequirementSummary,
+)
+from app.modules.requirement.schemas import (
+    CancelRequirementDraft,
+    CreateRequirementDraft,
+    HistoricalSupplierQuery,
+    SubmitRequirement,
+    UpdateRequirementDraft,
+)
 from app.modules.requirement.service import RequirementService
 from app.shared.errors import DomainError
 from app.shared.identity import AuditContext, CurrentUser
@@ -81,6 +93,103 @@ class RequirementServiceBackend:
         except DomainError as exc:
             raise self._backend_error(exc) from exc
         return RequirementDetail.model_validate(detail.model_dump(mode="json"))
+
+    async def submit(
+        self,
+        requirement_id: int,
+        payload: dict[str, Any],
+        *,
+        actor: CurrentUser,
+        request_id: str,
+        idempotency_key: str,
+    ) -> RequirementSubmissionResult:
+        try:
+            command = SubmitRequirement.model_validate(payload)
+            result = await self._service.submit(
+                requirement_id,
+                command,
+                AuditContext(
+                    actor=actor,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                ),
+            )
+        except ValidationError as exc:
+            raise self._validation_error(exc) from exc
+        except DomainError as exc:
+            raise self._backend_error(exc) from exc
+        return RequirementSubmissionResult.model_validate(result.model_dump(mode="json"))
+
+    async def cancel_draft(
+        self,
+        requirement_id: int,
+        payload: dict[str, Any],
+        *,
+        actor: CurrentUser,
+        request_id: str,
+        idempotency_key: str,
+    ) -> RequirementDetail:
+        try:
+            command = CancelRequirementDraft.model_validate(payload)
+            detail = await self._service.cancel_draft(
+                requirement_id,
+                command,
+                AuditContext(
+                    actor=actor,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                ),
+            )
+        except ValidationError as exc:
+            raise self._validation_error(exc) from exc
+        except DomainError as exc:
+            raise self._backend_error(exc) from exc
+        return RequirementDetail.model_validate(detail.model_dump(mode="json"))
+
+    async def search_historical_suppliers(
+        self,
+        payload: dict[str, Any],
+        *,
+        actor: CurrentUser,
+        request_id: str,
+    ) -> HistoricalSupplierRecommendationResult:
+        del request_id
+        try:
+            query = HistoricalSupplierQuery.model_validate(payload)
+            result = await self._service.search_historical_suppliers(query, actor)
+        except ValidationError as exc:
+            raise self._validation_error(exc) from exc
+        except DomainError as exc:
+            raise self._backend_error(exc) from exc
+        return HistoricalSupplierRecommendationResult.model_validate(result.model_dump(mode="json"))
+
+    async def list_mine(
+        self,
+        *,
+        actor: CurrentUser,
+        request_id: str,
+        status: str | None,
+        page: int,
+        page_size: int,
+    ) -> RequirementListResult:
+        del request_id
+        try:
+            items, total = await self._service.list_mine(
+                actor=actor,
+                status=status,
+                page=page,
+                page_size=page_size,
+            )
+        except DomainError as exc:
+            raise self._backend_error(exc) from exc
+        return RequirementListResult(
+            items=[
+                RequirementSummary.model_validate(item.model_dump(mode="json")) for item in items
+            ],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
 
     @staticmethod
     def _backend_error(exc: DomainError) -> ProcurementBackendError:

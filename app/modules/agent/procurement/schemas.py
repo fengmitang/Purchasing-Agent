@@ -135,6 +135,44 @@ class RequirementDetail(BaseModel):
     updated_at: str | None = None
 
 
+class RequirementSubmissionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requirement_id: int
+    requirement_no: str
+    status: str
+    version: int
+    submitted_at: str
+
+
+class RequirementSummary(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    requirement_id: int
+    requirement_no: str
+    product_name: str | None = None
+    status: str
+    total_amount: str | None = None
+    currency: str = "CNY"
+    updated_at: str
+    version: int
+
+
+class RequirementListResult(BaseModel):
+    items: list[RequirementSummary]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1, le=100)
+
+
+class HistoricalSupplierRecommendationResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    query_summary: str
+    result_code: str
+    recommendations: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class RequirementSessionReference(BaseModel):
     requirement_id: int
     requirement_no: str
@@ -152,3 +190,4 @@ class ProcurementSessionState(BaseModel):
     last_recommendation_id: int | None = None
     pending_action: dict[str, Any] | None = None
     recent_requirements: list[RequirementSessionReference] = Field(default_factory=list)
+    deferred_fields: list[str] = Field(default_factory=list)

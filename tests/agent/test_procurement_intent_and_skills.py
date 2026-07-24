@@ -45,6 +45,8 @@ class ProcurementIntentRuleTests(unittest.TestCase):
             "信息无误，确认提交审批": IntentCategory.CONFIRM_SUBMISSION,
             "这个采购需求不要了": IntentCategory.CANCEL_REQUIREMENT,
             "我的采购申请审批到哪了": IntentCategory.QUERY_STATUS,
+            "列出我的待审批申请": IntentCategory.LIST_REQUIREMENTS,
+            "推荐这个草稿的历史供应商": IntentCategory.SEARCH_HISTORICAL_SUPPLIERS,
             "你好": IntentCategory.UNKNOWN,
         }
 
@@ -119,6 +121,9 @@ class ProcurementSkillTests(unittest.TestCase):
     def test_requirement_message_injects_collection_skill(self) -> None:
         prompt = self.manager.prompt_for("我要采购两台服务器", "general")
         self.assertIn("collect-procurement-requirement", prompt)
+        self.assertIn("提交审批必填字段", prompt)
+        self.assertIn("禁止通过检查其他字段是否为 `null` 自行推断缺失信息", prompt)
+        self.assertIn("最多两个；没有缺失字段时不得追问", prompt)
 
     def test_history_message_injects_recommendation_skill(self) -> None:
         prompt = self.manager.prompt_for("查询这个型号的历史价格", "general")

@@ -13,7 +13,13 @@ from app.modules.agent.bootstrap import build_procurement_agent_service
 from app.modules.agent.enums import AgentScene, AgentStage
 from app.modules.agent.intent_recognizer import IntentCategory
 from app.modules.agent.model import AgentModelResponse, AgentToolCall
-from app.modules.agent.procurement.schemas import ProcurementSessionState, RequirementDetail
+from app.modules.agent.procurement.schemas import (
+    HistoricalSupplierRecommendationResult,
+    ProcurementSessionState,
+    RequirementDetail,
+    RequirementListResult,
+    RequirementSubmissionResult,
+)
 from app.modules.agent.procurement.session_store import InMemoryProcurementSessionStore
 from app.shared.identity import CurrentUser
 
@@ -61,6 +67,10 @@ class FakeBackend:
         self.create_calls = []
         self.get_calls = []
         self.update_calls = []
+        self.submit_calls = []
+        self.cancel_calls = []
+        self.search_calls = []
+        self.list_calls = []
 
     async def create_draft(self, payload, **kwargs):
         self.create_calls.append((payload, kwargs))
@@ -79,6 +89,44 @@ class FakeBackend:
             update={"version": self.detail.version + 1, "missing_fields": [], **updates}
         )
         return self.detail
+
+    async def submit(self, requirement_id, payload, **kwargs):
+        self.submit_calls.append((requirement_id, payload, kwargs))
+        self.detail = self.detail.model_copy(
+            update={
+                "status": "PENDING_APPROVAL",
+                "version": self.detail.version + 1,
+                "submitted_at": "2026-07-23T08:00:00+00:00",
+            }
+        )
+        return RequirementSubmissionResult(
+            requirement_id=requirement_id,
+            requirement_no=self.detail.requirement_no,
+            status="PENDING_APPROVAL",
+            version=self.detail.version,
+            submitted_at="2026-07-23T08:00:00+00:00",
+        )
+
+    async def cancel_draft(self, requirement_id, payload, **kwargs):
+        self.cancel_calls.append((requirement_id, payload, kwargs))
+        self.detail = self.detail.model_copy(
+            update={"status": "CANCELLED", "version": self.detail.version + 1}
+        )
+        return self.detail
+
+    async def search_historical_suppliers(self, payload, **kwargs):
+        self.search_calls.append((payload, kwargs))
+        return HistoricalSupplierRecommendationResult(
+            query_summary="服务器",
+            result_code="NO_HISTORY_MATCH",
+            recommendations=[],
+        )
+
+    async def list_mine(self, **kwargs):
+        self.list_calls.append(kwargs)
+        return RequirementListResult(
+            items=[], total=0, page=kwargs["page"], page_size=kwargs["page_size"]
+        )
 
 
 class MultiDraftBackend(FakeBackend):
@@ -244,7 +292,7 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("没有可执行", result.response)
         self.assertIn("TOOL_NOT_ALLOWED", model.calls[1]["messages"][-1]["content"][0]["content"])
 
-    async def test_confirmation_only_gets_detail_and_cannot_claim_submission(self):
+    async def test_confirmation_without_submit_call_cannot_claim_submission(self):
         backend = FakeBackend(draft_detail(missing_fields=[], conflicts=[]))
         store = InMemoryProcurementSessionStore()
         store.save("employee-1", "session-001", self._state())
@@ -261,9 +309,26 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("成功提交", result.response)
         self.assertIn("尚未正式提交", result.response)
         available = {item["name"] for item in model.calls[0]["tools"]}
-        self.assertEqual({"get_requirement_detail"}, available)
+        self.assertEqual(
+            {
+                "get_requirement_detail",
+                "update_requirement_draft",
+                "submit_requirement",
+            },
+            available,
+        )
+        system_prompt = model.calls[0]["system"]
+        self.assertIn(
+            "提交审批必填字段仅包括application_reason、application_location、product_name、quantity",
+            system_prompt,
+        )
+        self.assertIn(
+            "禁止通过检查工具结果中值为null的字段自行推断缺失项",
+            system_prompt,
+        )
+        self.assertIn("当前提交所需信息已经完整，可以提交审批", system_prompt)
 
-    async def test_cancellation_cannot_claim_an_unsupported_state_change(self):
+    async def test_cancellation_without_tool_call_cannot_claim_state_change(self):
         backend = FakeBackend(draft_detail())
         store = InMemoryProcurementSessionStore()
         store.save("employee-1", "session-001", self._state())
@@ -273,9 +338,150 @@ class ProcurementAgentLoopTests(unittest.IsolatedAsyncioTestCase):
         result = await self.call(service, IntentCategory.CANCEL_REQUIREMENT, "取消采购")
 
         self.assertNotIn("已经取消", result.response)
-        self.assertIn("没有执行取消", result.response)
+        self.assertIn("没有执行成功", result.response)
         available = {item["name"] for item in model.calls[0]["tools"]}
-        self.assertEqual({"get_requirement_detail"}, available)
+        self.assertEqual({"get_requirement_detail", "cancel_requirement"}, available)
+
+    async def test_mixed_update_then_submit_succeeds_in_one_turn(self):
+        backend = FakeBackend(draft_detail(missing_fields=["supplier_name"], conflicts=[]))
+        store = InMemoryProcurementSessionStore()
+        store.save("employee-1", "session-001", self._state())
+        model = QueueModel(
+            AgentModelResponse(
+                tool_calls=[
+                    AgentToolCall(
+                        id="update-1",
+                        name="update_requirement_draft",
+                        arguments={
+                            "changes": {"supplier_name": "某某公司"},
+                            "clear_fields": [],
+                            "defer_fields": [],
+                        },
+                    ),
+                    AgentToolCall(
+                        id="submit-1",
+                        name="submit_requirement",
+                        arguments={"confirmed": True},
+                    ),
+                ]
+            ),
+            AgentModelResponse(text="采购申请已提交审批。"),
+        )
+        service, _ = self.make_service(backend, model, store)
+
+        result = await self.call(
+            service,
+            IntentCategory.CONFIRM_SUBMISSION,
+            "供应商是某某公司，确认提交审批",
+        )
+
+        self.assertEqual(1, len(backend.update_calls))
+        self.assertEqual(1, len(backend.submit_calls))
+        self.assertEqual("PENDING_APPROVAL", result.procurement_state.status)
+        self.assertIn("已提交审批", result.response)
+
+    async def test_cancel_with_reason_and_confirmation_succeeds(self):
+        backend = FakeBackend(draft_detail())
+        store = InMemoryProcurementSessionStore()
+        store.save("employee-1", "session-001", self._state())
+        model = QueueModel(
+            tool_decision(
+                "cancel_requirement",
+                {"confirmed": True, "reason": "需求不再存在"},
+            ),
+            AgentModelResponse(text="采购草稿已取消。"),
+        )
+        service, _ = self.make_service(backend, model, store)
+
+        result = await self.call(
+            service,
+            IntentCategory.CANCEL_REQUIREMENT,
+            "需求不再存在，确认取消",
+        )
+
+        self.assertEqual(1, len(backend.cancel_calls))
+        self.assertEqual("CANCELLED", result.procurement_state.status)
+        self.assertIn("已取消", result.response)
+
+    async def test_cancel_tool_cannot_invent_explicit_confirmation(self):
+        backend = FakeBackend(draft_detail())
+        store = InMemoryProcurementSessionStore()
+        store.save("employee-1", "session-001", self._state())
+        model = QueueModel(
+            tool_decision(
+                "cancel_requirement",
+                {"confirmed": True, "reason": "需求不再存在"},
+            ),
+            AgentModelResponse(text="请确认是否取消这张采购草稿。"),
+        )
+        service, _ = self.make_service(backend, model, store)
+
+        result = await self.call(
+            service,
+            IntentCategory.CANCEL_REQUIREMENT,
+            "需求不再存在，我想取消",
+        )
+
+        self.assertEqual([], backend.cancel_calls)
+        self.assertIn("确认", result.response)
+        tool_result = model.calls[1]["messages"][-1]["content"][0]["content"]
+        self.assertIn("EXPLICIT_CONFIRMATION_REQUIRED", tool_result)
+
+    async def test_deferred_field_is_saved_without_database_patch(self):
+        backend = FakeBackend(draft_detail())
+        store = InMemoryProcurementSessionStore()
+        store.save("employee-1", "session-001", self._state())
+        model = QueueModel(
+            tool_decision(
+                "update_requirement_draft",
+                {"changes": {}, "clear_fields": [], "defer_fields": ["specification"]},
+            ),
+            AgentModelResponse(text="已记录规格暂不补充。"),
+        )
+        service, store = self.make_service(backend, model, store)
+
+        await self.call(
+            service,
+            IntentCategory.SUPPLEMENT_REQUIREMENT,
+            "规格暂时不填，先保存",
+        )
+
+        self.assertEqual([], backend.update_calls)
+        self.assertEqual(["specification"], store.get("employee-1", "session-001").deferred_fields)
+
+    async def test_recommendation_and_list_intents_only_expose_read_tools(self):
+        backend = FakeBackend(draft_detail())
+        store = InMemoryProcurementSessionStore()
+        store.save("employee-1", "session-001", self._state())
+        model = QueueModel(
+            tool_decision("search_historical_suppliers", {"limit": 5}),
+            AgentModelResponse(text="暂无历史匹配。"),
+            tool_decision("list_my_requirements", {"page": 1, "page_size": 20}),
+            AgentModelResponse(text="本人暂无采购申请。"),
+        )
+        service, _ = self.make_service(backend, model, store)
+
+        await self.call(
+            service,
+            IntentCategory.SEARCH_HISTORICAL_SUPPLIERS,
+            "推荐这个草稿的历史供应商",
+        )
+        recommendation_tools = {item["name"] for item in model.calls[0]["tools"]}
+        self.assertEqual(
+            {"get_requirement_detail", "search_historical_suppliers"},
+            recommendation_tools,
+        )
+        self.assertEqual(1, len(backend.search_calls))
+
+        await self.call(
+            service,
+            IntentCategory.LIST_REQUIREMENTS,
+            "列出我的采购申请",
+            request_id="req-list",
+        )
+        list_tools = {item["name"] for item in model.calls[2]["tools"]}
+        self.assertEqual({"list_my_requirements"}, list_tools)
+        self.assertEqual(1, len(backend.list_calls))
 
     async def test_agent_stops_at_iteration_limit(self):
         backend = FakeBackend()

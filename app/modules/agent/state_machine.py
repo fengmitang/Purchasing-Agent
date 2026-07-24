@@ -30,4 +30,5 @@ def state_from_detail(
         last_recommendation_id=(previous.last_recommendation_id if previous else None),
         pending_action=(previous.pending_action if previous else None),
         recent_requirements=(list(previous.recent_requirements) if previous else []),
+        deferred_fields=(list(previous.deferred_fields) if previous else []),
     )

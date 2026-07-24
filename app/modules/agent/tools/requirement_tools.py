@@ -1,13 +1,15 @@
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.agent.context import AgentContext
+from app.modules.agent.enums import AgentStage
 from app.modules.agent.procurement.idempotency import update_idempotency_key
 from app.modules.agent.procurement.protocols import RequirementBackendProtocol
 from app.modules.agent.procurement.schemas import (
+    DRAFT_FIELD_NAMES,
     DraftExtraction,
     ProcurementSessionState,
     RequirementDetail,
@@ -80,6 +82,31 @@ class SwitchActiveRequirementInput(BaseModel):
 
 class UpdateRequirementDraftInput(DraftExtraction):
     model_config = ConfigDict(extra="forbid")
+    defer_fields: list[str] = Field(default_factory=list)
+
+
+class SubmitRequirementInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmed: Literal[True]
+    recommendation_id: int | None = Field(default=None, gt=0)
+
+
+class CancelRequirementInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    confirmed: Literal[True]
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class HistoricalSupplierSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class ListMyRequirementsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    status: str | None = Field(default=None, pattern=r"^[A-Z_]{3,30}$")
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
 
 
 class CreateRequirementDraftTool(AgentTool):
@@ -330,7 +357,23 @@ class UpdateRequirementDraftTool(AgentTool):
 
         patch = arguments.to_patch()
         patch.pop("session_id", None)
+        deferred = {
+            field_name for field_name in arguments.defer_fields if field_name in DRAFT_FIELD_NAMES
+        }
+        current_state = context.procurement_state
+        current_state.deferred_fields = sorted(
+            (set(current_state.deferred_fields) | deferred) - set(patch)
+        )
         if not patch:
+            if deferred:
+                return ToolExecutionResult(
+                    success=True,
+                    message="已记录本轮暂不补充的字段；草稿保持不变。",
+                    data={
+                        **_detail_data(current),
+                        "deferred_fields": current_state.deferred_fields,
+                    },
+                )
             return ToolExecutionResult(
                 success=False,
                 code="EMPTY_UPDATE",
@@ -355,4 +398,212 @@ class UpdateRequirementDraftTool(AgentTool):
             success=True,
             message=f"采购草稿 {detail.requirement_no} 已更新。",
             data=_detail_data(detail),
+        )
+
+
+class SubmitRequirementTool(AgentTool):
+    name = "submit_requirement"
+    description = (
+        "把当前员工的完整采购草稿正式提交审批。仅在用户本轮明确确认提交时调用；"
+        "工具自动读取数据库最新详情和version，缺失、冲突或非草稿状态会拒绝提交。"
+    )
+    input_model = SubmitRequirementInput
+    is_write = True
+
+    def __init__(self, backend: RequirementBackendProtocol) -> None:
+        self._backend = backend
+
+    async def execute(
+        self, context: AgentContext, arguments: SubmitRequirementInput
+    ) -> ToolExecutionResult:
+        from app.modules.agent.intent_recognizer import IntentCategory
+
+        if context.intent != IntentCategory.CONFIRM_SUBMISSION:
+            return ToolExecutionResult(
+                success=False,
+                code="EXPLICIT_CONFIRMATION_REQUIRED",
+                message="只有用户本轮明确确认提交审批时才能正式提交。",
+            )
+        state = context.procurement_state
+        if state is None:
+            return ToolExecutionResult(
+                success=False, code="NO_ACTIVE_REQUIREMENT", message="当前会话没有可提交的草稿。"
+            )
+        current = await self._backend.get_detail(
+            state.requirement_id, actor=context.actor, request_id=context.request_id
+        )
+        context.procurement_state = state_from_detail(current, scene=context.scene, previous=state)
+        if current.status != "DRAFT":
+            return ToolExecutionResult(
+                success=False,
+                code="REQUIREMENT_NOT_SUBMITTABLE",
+                message=f"采购需求当前状态为 {current.status}，不能提交审批。",
+                data=_detail_data(current),
+            )
+        if current.missing_fields or current.conflicts:
+            return ToolExecutionResult(
+                success=False,
+                code="REQUIREMENT_INCOMPLETE",
+                message="采购草稿仍有必填字段缺失或冲突，尚未提交。",
+                data=_detail_data(current),
+            )
+        result = await self._backend.submit(
+            current.requirement_id,
+            {
+                "version": current.version,
+                "confirmed": arguments.confirmed,
+                "recommendation_id": arguments.recommendation_id,
+            },
+            actor=context.actor,
+            request_id=context.request_id,
+            idempotency_key=f"submit-{current.requirement_id}-v{current.version}",
+        )
+        if result.status != "PENDING_APPROVAL":
+            return ToolExecutionResult(
+                success=False,
+                code="INVALID_BACKEND_RESPONSE",
+                message="后端未返回待审批状态，未更新会话状态。",
+                terminal=True,
+            )
+        submitted = context.procurement_state
+        submitted.status = result.status
+        submitted.version = result.version
+        submitted.stage = AgentStage.SUBMITTED
+        submitted.pending_action = None
+        return ToolExecutionResult(
+            success=True,
+            message=f"采购申请 {result.requirement_no} 已正式提交审批。",
+            data=result.model_dump(mode="json"),
+        )
+
+
+class CancelRequirementTool(AgentTool):
+    name = "cancel_requirement"
+    description = (
+        "取消当前员工本人的采购草稿。仅在用户本轮明确确认取消并提供原因时调用；"
+        "工具自动读取数据库最新状态和version，只允许取消DRAFT。"
+    )
+    input_model = CancelRequirementInput
+    is_write = True
+
+    def __init__(self, backend: RequirementBackendProtocol) -> None:
+        self._backend = backend
+
+    async def execute(
+        self, context: AgentContext, arguments: CancelRequirementInput
+    ) -> ToolExecutionResult:
+        from app.modules.agent.intent_recognizer import IntentCategory
+
+        explicit_confirmation = any(
+            phrase in context.message for phrase in ("确认取消", "确认撤销", "确定取消", "确定撤销")
+        )
+        if context.intent != IntentCategory.CANCEL_REQUIREMENT or not explicit_confirmation:
+            return ToolExecutionResult(
+                success=False,
+                code="EXPLICIT_CONFIRMATION_REQUIRED",
+                message="只有用户本轮明确确认取消时才能取消草稿。",
+            )
+        state = context.procurement_state
+        if state is None:
+            return ToolExecutionResult(
+                success=False, code="NO_ACTIVE_REQUIREMENT", message="当前会话没有可取消的草稿。"
+            )
+        current = await self._backend.get_detail(
+            state.requirement_id, actor=context.actor, request_id=context.request_id
+        )
+        if current.status != "DRAFT":
+            return ToolExecutionResult(
+                success=False,
+                code="REQUIREMENT_NOT_CANCELLABLE",
+                message=f"采购需求当前状态为 {current.status}，不能取消草稿。",
+                data=_detail_data(current),
+            )
+        detail = await self._backend.cancel_draft(
+            current.requirement_id,
+            {
+                "version": current.version,
+                "confirmed": arguments.confirmed,
+                "reason": arguments.reason,
+            },
+            actor=context.actor,
+            request_id=context.request_id,
+            idempotency_key=f"cancel-{current.requirement_id}-v{current.version}",
+        )
+        if detail.status != "CANCELLED":
+            return ToolExecutionResult(
+                success=False,
+                code="INVALID_BACKEND_RESPONSE",
+                message="后端未返回已取消状态，未更新会话状态。",
+                terminal=True,
+            )
+        context.procurement_state = state_from_detail(detail, scene=context.scene, previous=state)
+        return ToolExecutionResult(
+            success=True,
+            message=f"采购草稿 {detail.requirement_no} 已取消。",
+            data=_detail_data(detail),
+        )
+
+
+class SearchHistoricalSuppliersTool(AgentTool):
+    name = "search_historical_suppliers"
+    description = (
+        "根据当前员工的活动草稿查询相似已完成采购和历史供应商。只读，不会自动选择供应商或修改草稿。"
+    )
+    input_model = HistoricalSupplierSearchInput
+
+    def __init__(self, backend: RequirementBackendProtocol) -> None:
+        self._backend = backend
+
+    async def execute(
+        self, context: AgentContext, arguments: HistoricalSupplierSearchInput
+    ) -> ToolExecutionResult:
+        state = context.procurement_state
+        if state is None:
+            return ToolExecutionResult(
+                success=False,
+                code="NO_ACTIVE_REQUIREMENT",
+                message="当前会话没有可用于历史推荐的活动草稿。",
+            )
+        current = await self._backend.get_detail(
+            state.requirement_id, actor=context.actor, request_id=context.request_id
+        )
+        context.procurement_state = state_from_detail(current, scene=context.scene, previous=state)
+        result = await self._backend.search_historical_suppliers(
+            {"requirement_id": current.requirement_id, "limit": arguments.limit},
+            actor=context.actor,
+            request_id=context.request_id,
+        )
+        return ToolExecutionResult(
+            success=True,
+            message=(
+                "已查询历史供应商推荐。"
+                if result.recommendations
+                else "暂无可追溯的相似历史采购记录。"
+            ),
+            data=result.model_dump(mode="json"),
+        )
+
+
+class ListMyRequirementsTool(AgentTool):
+    name = "list_my_requirements"
+    description = "分页查询当前登录员工本人的采购申请，可按状态筛选；只读且不切换活动草稿。"
+    input_model = ListMyRequirementsInput
+
+    def __init__(self, backend: RequirementBackendProtocol) -> None:
+        self._backend = backend
+
+    async def execute(
+        self, context: AgentContext, arguments: ListMyRequirementsInput
+    ) -> ToolExecutionResult:
+        result = await self._backend.list_mine(
+            actor=context.actor,
+            request_id=context.request_id,
+            status=arguments.status,
+            page=arguments.page,
+            page_size=arguments.page_size,
+        )
+        return ToolExecutionResult(
+            success=True,
+            message=f"已查询本人采购申请，共 {result.total} 条。",
+            data=result.model_dump(mode="json"),
         )
