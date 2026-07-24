@@ -64,11 +64,13 @@ class CurrentUser(BaseModel):
     organization_id: int
     building_ids: frozenset[int]
 
+
 class UserDataScope(BaseModel):
     organization_ids: frozenset[int]
     building_ids: frozenset[int]
     category_ids: frozenset[int]
     global_access: bool = False
+
 
 class AuditContext(BaseModel):
     actor: CurrentUser
@@ -76,6 +78,7 @@ class AuditContext(BaseModel):
     idempotency_key: str | None = None
     reason: str | None = None
     source_ip: str | None = None
+
 
 class PageRequest(BaseModel):
     page: int = 1
@@ -203,20 +206,24 @@ class ProductQueryServiceProtocol(Protocol):
         self, query: ProductSearch, scope: UserDataScope, page: PageRequest
     ) -> Page[ProductSummary]: ...
 
+
 class WhitelistServiceProtocol(Protocol):
     async def find_effective(
         self, query: WhitelistQuery, scope: UserDataScope, at: datetime
     ) -> tuple[WhitelistMatch, ...]: ...
+
 
 class BlacklistServiceProtocol(Protocol):
     async def find_effective(
         self, query: BlacklistQuery, scope: UserDataScope, at: datetime
     ) -> tuple[BlacklistMatch, ...]: ...
 
+
 class PurchaseHistoryServiceProtocol(Protocol):
     async def search_similar(
         self, query: HistoryQuery, scope: UserDataScope, page: PageRequest
     ) -> Page[PurchaseHistorySummary]: ...
+
 
 class AuditServiceProtocol(Protocol):
     async def record(self, event: AuditEvent, context: AuditContext) -> None: ...
