@@ -22,7 +22,15 @@ class FakeResponse:
         return self._body
 
 
-def test_send_message_uses_utf8_and_generates_identifiers(monkeypatch) -> None:
+class FakeOpener:
+    def __init__(self, callback) -> None:
+        self._callback = callback
+
+    def open(self, request, timeout):
+        return self._callback(request, timeout)
+
+
+def test_send_message_uses_utf8_and_generates_identifiers() -> None:
     captured = {}
 
     def fake_urlopen(request, timeout):
@@ -39,8 +47,12 @@ def test_send_message_uses_utf8_and_generates_identifiers(monkeypatch) -> None:
             }
         )
 
-    monkeypatch.setattr(chat, "urlopen", fake_urlopen)
-    client = AgentApiClient(user_code="DEV-E0001", timeout_seconds=12)
+    client = AgentApiClient(
+        dev_user_code="DEV-E0001",
+        use_dev_headers=True,
+        timeout_seconds=12,
+        opener=FakeOpener(fake_urlopen),  # type: ignore[arg-type]
+    )
 
     result = client.send_message("cli-test", "采购两台服务器")
 
@@ -55,7 +67,46 @@ def test_send_message_uses_utf8_and_generates_identifiers(monkeypatch) -> None:
     assert captured["timeout"] == 12
 
 
-def test_history_and_reset_use_expected_http_contract(monkeypatch) -> None:
+def test_login_then_agent_request_uses_cookie_opener_without_dev_headers() -> None:
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        if request.full_url.endswith("/api/v1/auth/login"):
+            return FakeResponse(
+                {
+                    "data": {
+                        "user": {
+                            "employee_no": "DEV-E0001",
+                            "name": "测试员工",
+                            "building_ids": [1],
+                        }
+                    }
+                }
+            )
+        return FakeResponse(
+            {
+                "data": {
+                    "content": "草稿已创建",
+                    "intent": "create_requirement",
+                    "scene": "PROCUREMENT_REQUIREMENT",
+                    "stage": "COLLECTING_INFORMATION",
+                }
+            }
+        )
+
+    client = AgentApiClient(opener=FakeOpener(fake_urlopen))  # type: ignore[arg-type]
+    user = client.login("DEV-E0001", "secret-password")
+    client.send_message("conv-1", "采购服务器")
+
+    login_body = json.loads(requests[0].data.decode("utf-8"))
+    assert user["building_ids"] == [1]
+    assert login_body == {"identifier": "DEV-E0001", "password": "secret-password"}
+    assert requests[1].get_header("X-user-code") is None
+    assert requests[1].get_header("X-user-roles") is None
+
+
+def test_history_and_reset_use_expected_http_contract() -> None:
     requests = []
 
     def fake_urlopen(request, timeout):
@@ -74,8 +125,7 @@ def test_history_and_reset_use_expected_http_contract(monkeypatch) -> None:
             )
         return FakeResponse({"data": {"conversation_id": "conv-1", "cleared": True}})
 
-    monkeypatch.setattr(chat, "urlopen", fake_urlopen)
-    client = AgentApiClient()
+    client = AgentApiClient(opener=FakeOpener(fake_urlopen))  # type: ignore[arg-type]
 
     assert client.history("conv-1")[0]["content"] == "你好"
     assert client.reset("conv-1")["cleared"] is True
@@ -85,7 +135,7 @@ def test_history_and_reset_use_expected_http_contract(monkeypatch) -> None:
     assert requests[1].get_header("Idempotency-key")
 
 
-def test_http_error_is_rendered_without_traceback(monkeypatch) -> None:
+def test_http_error_is_rendered_without_traceback() -> None:
     error_body = json.dumps(
         {"error": {"code": "AGENT_UNAVAILABLE", "message": "服务暂时不可用"}}
     ).encode()
@@ -93,10 +143,10 @@ def test_http_error_is_rendered_without_traceback(monkeypatch) -> None:
     def fake_urlopen(request, timeout):
         raise HTTPError(request.full_url, 503, "error", {}, BytesIO(error_body))
 
-    monkeypatch.setattr(chat, "urlopen", fake_urlopen)
-
     with pytest.raises(AgentCliError, match="AGENT_UNAVAILABLE"):
-        AgentApiClient().send_message("conv-1", "你好")
+        AgentApiClient(opener=FakeOpener(fake_urlopen)).send_message(  # type: ignore[arg-type]
+            "conv-1", "你好"
+        )
 
 
 def test_interactive_commands_keep_and_replace_conversations() -> None:
@@ -155,3 +205,5 @@ def test_utf8_configuration_reconfigures_available_streams() -> None:
 def test_parser_uses_timeout_long_enough_for_two_model_stages() -> None:
     args = chat.build_parser().parse_args([])
     assert args.timeout == 90.0
+    assert args.identifier == "DEV-E0001"
+    assert args.dev_headers is False

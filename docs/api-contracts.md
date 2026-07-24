@@ -95,6 +95,8 @@ class PageRequest(BaseModel):
 | Implemented | `GET /health` | 进程存活，不依赖外部系统 | 返回 200、服务状态、服务名、版本和 UTC 时间 |
 | Planned | `GET /api/v1/health/ready` | 检查数据库和迁移就绪 | 依赖失败返回 503，不泄密 |
 | Implemented | `POST /api/v1/auth/login` | 使用员工工号或电话和密码登录 | 成功设置 HttpOnly 会话 Cookie |
+
+交互式 CLI 使用同一登录契约，并通过 CookieJar 保存服务端 Session Cookie；默认不再使用 `X-User-Code`/`X-User-Roles` 代替正式登录。开发身份 Header 仅在本地环境显式启用。
 | Implemented | `GET /api/v1/auth/me` | 返回当前员工、角色和楼宇范围 | 未认证 401 |
 | Implemented | `POST /api/v1/auth/logout` | 撤销服务端会话并清除 Cookie | 可重复调用 |
 | Implemented | `POST /api/v1/auth/change-password` | 修改本人密码并撤销全部会话 | 校验当前密码和新密码强度 |

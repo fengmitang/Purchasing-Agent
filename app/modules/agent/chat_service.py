@@ -18,8 +18,13 @@ from app.modules.agent.chat_store import (
     ChatStoreUnavailable,
     ConversationBusy,
 )
-from app.modules.agent.intent_service import IntentServiceProtocol
-from app.modules.agent.procurement.schemas import RequirementSessionReference
+from app.modules.agent.enums import IntentCategory
+from app.modules.agent.intent_service import ProcurementIntentResolverProtocol
+from app.modules.agent.procurement.schemas import (
+    ProcurementSessionState,
+    RequirementSessionReference,
+)
+from app.modules.agent.routes import AgentRoute, RouteResolver
 from app.modules.agent.service import AgentService
 from app.shared.errors import DomainError, ErrorCode
 from app.shared.identity import CurrentUser
@@ -32,13 +37,15 @@ class AgentChatService:
         self,
         *,
         agent_service: AgentService,
-        intent_service: IntentServiceProtocol,
+        procurement_intent_resolver: ProcurementIntentResolverProtocol,
         store: AgentChatStoreProtocol,
+        route_resolver: RouteResolver | None = None,
         history_replay_limit: int = 12,
     ) -> None:
         self._agent = agent_service
-        self._intent = intent_service
+        self._procurement_intent = procurement_intent_resolver
         self._store = store
+        self._route_resolver = route_resolver or RouteResolver()
         self._history_replay_limit = history_replay_limit
 
     async def send_message(
@@ -54,6 +61,12 @@ class AgentChatService:
         turn_state = ChatTurnState.RECEIVED
         user_message_id = uuid4().hex
         user_message_recorded = False
+        assistant_message_id: str | None = None
+        assistant_message_recorded = False
+        previous_state: ProcurementSessionState | None = None
+        session_state_write_attempted = False
+        previous_route: AgentRoute | None = None
+        route_write_attempted = False
         try:
             async with self._store.lock(conversation_key):
                 replay = await self._store.get_idempotency(conversation_key, idempotency_key)
@@ -67,7 +80,14 @@ class AgentChatService:
                     return AgentMessageResult.model_validate(response)
 
                 history = await self._store.list_messages(conversation_key)
-                state = await self._store.get_state(conversation_key)
+                state = await self._agent.get_session_state(
+                    actor.organization_id,
+                    actor.user_code,
+                    command.conversation_id,
+                )
+                previous_state = state.model_copy(deep=True) if state is not None else None
+                active_route = await self._store.get_route(conversation_key)
+                previous_route = active_route
                 turn_state = ChatTurnState.SESSION_LOADED
                 now = datetime.now(UTC)
                 await self._store.append_message(
@@ -83,7 +103,17 @@ class AgentChatService:
                 )
                 user_message_recorded = True
                 replay_history = self._replay_history(history)
-                intent = await self._intent.resolve(command.content, replay_history)
+                route_decision = self._route_resolver.resolve(
+                    message=command.content,
+                    has_procurement_state=state is not None,
+                    active_route=active_route,
+                    history=replay_history,
+                )
+                intent = (
+                    await self._procurement_intent.resolve(command.content, replay_history)
+                    if route_decision.route == AgentRoute.PROCUREMENT
+                    else IntentCategory.UNKNOWN
+                )
                 turn_state = ChatTurnState.INTENT_RESOLVED
                 turn_state = ChatTurnState.AGENT_RUNNING
                 result = await self._agent.handle(
@@ -96,6 +126,8 @@ class AgentChatService:
                     history=replay_history,
                     state_override=state,
                     persist_state=False,
+                    active_route=active_route,
+                    route_decision=route_decision,
                 )
                 created_at = datetime.now(UTC)
                 response = AgentMessageResult(
@@ -116,20 +148,38 @@ class AgentChatService:
                     ),
                     created_at=created_at,
                 )
+                if result.procurement_state is not None:
+                    session_state_write_attempted = True
+                    await self._agent.save_session_state(
+                        actor.organization_id,
+                        actor.user_code,
+                        command.conversation_id,
+                        result.procurement_state,
+                    )
+                assistant_message_id = response.message_id
                 await self._store.append_message(
                     conversation_key,
                     ChatHistoryMessage(
                         message_id=response.message_id,
                         role="ASSISTANT",
                         content=response.content,
-                        status=ChatMessageStatus.COMPLETED,
+                        status=ChatMessageStatus.PROCESSING,
                         created_at=created_at,
                     ),
                 )
-                if result.procurement_state is not None:
-                    await self._store.save_state(conversation_key, result.procurement_state)
+                assistant_message_recorded = True
+                route_write_attempted = True
+                await self._store.save_route(
+                    conversation_key,
+                    route_decision.route,
+                )
                 await self._store.set_message_status(
                     conversation_key, user_message_id, ChatMessageStatus.COMPLETED
+                )
+                await self._store.set_message_status(
+                    conversation_key,
+                    response.message_id,
+                    ChatMessageStatus.COMPLETED,
                 )
                 turn_state = ChatTurnState.SAVED
                 await self._store.save_idempotency(
@@ -141,11 +191,17 @@ class AgentChatService:
                 turn_state = ChatTurnState.RESPONDED
                 return response
         except DomainError:
-            if user_message_recorded:
-                with suppress(Exception):
-                    await self._store.set_message_status(
-                        conversation_key, user_message_id, ChatMessageStatus.FAILED
-                    )
+            await self._rollback_turn(
+                conversation_key=conversation_key,
+                conversation_id=command.conversation_id,
+                actor=actor,
+                user_message_id=user_message_id if user_message_recorded else None,
+                assistant_message_id=(assistant_message_id if assistant_message_recorded else None),
+                previous_state=previous_state,
+                session_state_write_attempted=session_state_write_attempted,
+                previous_route=previous_route,
+                route_write_attempted=route_write_attempted,
+            )
             raise
         except ConversationBusy as exc:
             raise DomainError(
@@ -153,21 +209,34 @@ class AgentChatService:
                 "当前会话正在处理另一条消息，请稍后重试",
             ) from exc
         except ChatStoreUnavailable as exc:
-            if user_message_recorded:
-                with suppress(Exception):
-                    await self._store.set_message_status(
-                        conversation_key, user_message_id, ChatMessageStatus.FAILED
-                    )
+            await self._rollback_turn(
+                conversation_key=conversation_key,
+                conversation_id=command.conversation_id,
+                actor=actor,
+                user_message_id=user_message_id if user_message_recorded else None,
+                assistant_message_id=(assistant_message_id if assistant_message_recorded else None),
+                previous_state=previous_state,
+                session_state_write_attempted=session_state_write_attempted,
+                previous_route=previous_route,
+                route_write_attempted=route_write_attempted,
+            )
             raise DomainError(
                 ErrorCode.AGENT_UNAVAILABLE,
                 "聊天会话服务暂时不可用，请稍后重试",
             ) from exc
         except Exception as exc:
             turn_state = ChatTurnState.FAILED
-            with suppress(Exception):
-                await self._store.set_message_status(
-                    conversation_key, user_message_id, ChatMessageStatus.FAILED
-                )
+            await self._rollback_turn(
+                conversation_key=conversation_key,
+                conversation_id=command.conversation_id,
+                actor=actor,
+                user_message_id=user_message_id if user_message_recorded else None,
+                assistant_message_id=(assistant_message_id if assistant_message_recorded else None),
+                previous_state=previous_state,
+                session_state_write_attempted=session_state_write_attempted,
+                previous_route=previous_route,
+                route_write_attempted=route_write_attempted,
+            )
             logger.warning(
                 "Agent chat turn failed request_id=%s state=%s",
                 request_id,
@@ -178,6 +247,49 @@ class AgentChatService:
                 ErrorCode.AGENT_UNAVAILABLE,
                 "Agent 服务暂时不可用，请稍后重试",
             ) from exc
+
+    async def _rollback_turn(
+        self,
+        *,
+        conversation_key: str,
+        conversation_id: str,
+        actor: CurrentUser,
+        user_message_id: str | None,
+        assistant_message_id: str | None,
+        previous_state: ProcurementSessionState | None,
+        session_state_write_attempted: bool,
+        previous_route: AgentRoute | None,
+        route_write_attempted: bool,
+    ) -> None:
+        for message_id in (user_message_id, assistant_message_id):
+            if message_id is not None:
+                with suppress(Exception):
+                    await self._store.set_message_status(
+                        conversation_key,
+                        message_id,
+                        ChatMessageStatus.FAILED,
+                    )
+        if route_write_attempted:
+            with suppress(Exception):
+                if previous_route is None:
+                    await self._store.clear_route(conversation_key)
+                else:
+                    await self._store.save_route(conversation_key, previous_route)
+        if session_state_write_attempted:
+            with suppress(Exception):
+                if previous_state is None:
+                    await self._agent.clear_session_state(
+                        actor.organization_id,
+                        actor.user_code,
+                        conversation_id,
+                    )
+                else:
+                    await self._agent.save_session_state(
+                        actor.organization_id,
+                        actor.user_code,
+                        conversation_id,
+                        previous_state,
+                    )
 
     async def list_messages(
         self,
@@ -218,6 +330,11 @@ class AgentChatService:
                             "同一幂等键不能用于不同的聊天请求",
                         )
                     return ConversationResetResult.model_validate(response)
+                await self._agent.clear_session_state(
+                    actor.organization_id,
+                    actor.user_code,
+                    conversation_id,
+                )
                 await self._store.clear(key)
                 result = ConversationResetResult(conversation_id=conversation_id)
                 await self._store.save_idempotency(
@@ -230,6 +347,16 @@ class AgentChatService:
             raise DomainError(ErrorCode.CONVERSATION_BUSY, "当前会话正在处理消息") from exc
         except ChatStoreUnavailable as exc:
             raise DomainError(ErrorCode.AGENT_UNAVAILABLE, "聊天会话服务暂时不可用") from exc
+        except Exception as exc:
+            logger.warning(
+                "Agent conversation reset failed conversation_id=%s",
+                conversation_id,
+                exc_info=True,
+            )
+            raise DomainError(
+                ErrorCode.AGENT_UNAVAILABLE,
+                "聊天会话服务暂时不可用",
+            ) from exc
 
     @staticmethod
     def conversation_key(actor: CurrentUser, conversation_id: str) -> str:

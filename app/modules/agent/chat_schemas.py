@@ -4,8 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from app.modules.agent.enums import AgentScene, AgentStage
-from app.modules.agent.intent_recognizer import IntentCategory
+from app.modules.agent.enums import AgentScene, AgentStage, IntentCategory
 from app.modules.agent.procurement.schemas import RequirementSessionReference
 
 SafeIdentifier = Annotated[

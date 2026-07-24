@@ -27,7 +27,7 @@ agent = [
     "redis>=5.2,<6.0",
 ]
 dev = [
-    "httpx2>=2.7,<3.0",
+    "httpx>=0.28,<1.0",
     "pytest>=8,<9",
     "pytest-asyncio>=1.0,<2.0",
     "ruff==0.16.0",

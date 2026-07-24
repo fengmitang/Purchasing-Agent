@@ -1,51 +1,40 @@
 from app.modules.agent.context import AgentContext
-from app.modules.agent.enums import AgentScene, AgentStage
-from app.modules.agent.intent_recognizer import IntentCategory
+from app.modules.agent.enums import AgentScene, AgentStage, IntentCategory
 from app.modules.agent.procurement.schemas import ProcurementSessionState
 from app.modules.agent.procurement.session_store import ProcurementSessionStoreProtocol
 from app.modules.agent.result import AgentHandleResult
-from app.modules.agent.runner import ProcurementAgentRunner
+from app.modules.agent.routes import AgentRoute, RouteDecision, RouteResolver
+from app.modules.agent.runner import AgentLoopRuntime
 from app.shared.identity import CurrentUser
 
 
 class AgentService:
-    HANDLED_INTENTS = {
-        IntentCategory.CREATE_REQUIREMENT,
-        IntentCategory.SUPPLEMENT_REQUIREMENT,
-        IntentCategory.MODIFY_REQUIREMENT,
-        IntentCategory.VIEW_REQUIREMENT,
-        IntentCategory.CONFIRM_SUBMISSION,
-        IntentCategory.CANCEL_REQUIREMENT,
-        IntentCategory.QUERY_STATUS,
-        IntentCategory.LIST_REQUIREMENTS,
-        IntentCategory.SEARCH_HISTORICAL_SUPPLIERS,
-    }
-
     def __init__(
         self,
-        runner: ProcurementAgentRunner,
+        runner: AgentLoopRuntime,
         session_store: ProcurementSessionStoreProtocol,
+        route_resolver: RouteResolver | None = None,
     ) -> None:
         self._runner = runner
         self._session_store = session_store
+        self._route_resolver = route_resolver or RouteResolver()
 
-    def has_session(self, user_id: str, conv_id: str) -> bool:
-        return self._session_store.get(user_id, conv_id) is not None
+    async def has_session(self, organization_id: int, user_id: str, conv_id: str) -> bool:
+        return await self._session_store.get(organization_id, user_id, conv_id) is not None
 
-    def should_handle(
+    async def get_session_state(
+        self, organization_id: int, user_id: str, conv_id: str
+    ) -> ProcurementSessionState | None:
+        return await self._session_store.get(organization_id, user_id, conv_id)
+
+    async def save_session_state(
         self,
-        intent: IntentCategory,
+        organization_id: int,
         user_id: str,
         conv_id: str,
-        history: list[dict[str, str]] | None = None,
-    ) -> bool:
-        return intent in self.HANDLED_INTENTS or (
-            intent == IntentCategory.UNKNOWN
-            and (
-                self.has_session(user_id, conv_id)
-                or self._history_has_procurement_context(history or [])
-            )
-        )
+        state: ProcurementSessionState,
+    ) -> None:
+        await self._session_store.save(organization_id, user_id, conv_id, state)
 
     async def handle(
         self,
@@ -59,17 +48,25 @@ class AgentService:
         history: list[dict[str, str]] | None = None,
         state_override: ProcurementSessionState | None = None,
         persist_state: bool = True,
+        active_route: AgentRoute | None = None,
+        route_decision: RouteDecision | None = None,
     ) -> AgentHandleResult:
-        state = state_override or self._session_store.get(user_id, conv_id)
-        effective_intent = intent
-        if intent == IntentCategory.UNKNOWN and state is not None:
-            effective_intent = IntentCategory.SUPPLEMENT_REQUIREMENT
-        elif intent == IntentCategory.UNKNOWN and self._history_has_procurement_context(
-            history or []
-        ):
-            effective_intent = IntentCategory.CREATE_REQUIREMENT
+        state = state_override or await self._session_store.get(
+            actor.organization_id, user_id, conv_id
+        )
+        decision = route_decision or self._route_resolver.resolve(
+            message=message,
+            intent=intent,
+            has_procurement_state=state is not None,
+            active_route=active_route,
+            history=history,
+        )
+        effective_intent = self._route_resolver.effective_intent(
+            intent, has_procurement_state=state is not None, history=history
+        )
 
-        scene = self._scene_for(effective_intent)
+        scene = self._scene_for(effective_intent, decision.route)
+        route = decision.route
         stage = (
             state.stage
             if state is not None
@@ -90,33 +87,29 @@ class AgentService:
             scene=scene,
             stage=stage,
             procurement_state=state,
+            route=route,
+            route_needs_clarification=decision.needs_clarification,
         )
 
         result = await self._runner.run(context)
         if result.procurement_state is not None and persist_state:
             result.procurement_state.scene = result.scene
             result.procurement_state.stage = result.stage
-            self._session_store.save(user_id, conv_id, result.procurement_state)
+            await self._session_store.save(
+                actor.organization_id,
+                user_id,
+                conv_id,
+                result.procurement_state,
+            )
         return result
 
-    @staticmethod
-    def _scene_for(intent: IntentCategory) -> AgentScene:
-        if intent == IntentCategory.QUERY_STATUS:
-            return AgentScene.PROCUREMENT_STATUS
-        if intent == IntentCategory.UNKNOWN:
-            return AgentScene.GENERAL_QUERY
-        return AgentScene.PROCUREMENT_REQUIREMENT
+    async def clear_session_state(self, organization_id: int, user_id: str, conv_id: str) -> None:
+        await self._session_store.clear(organization_id, user_id, conv_id)
 
     @staticmethod
-    def _history_has_procurement_context(history: list[dict[str, str]]) -> bool:
-        markers = (
-            "采购草稿",
-            "采购需求",
-            "要采购的设备",
-            "请补充采购",
-            "确认提交",
-        )
-        return any(
-            any(marker in str(item.get("content", "")) for marker in markers)
-            for item in history[-6:]
-        )
+    def _scene_for(intent: IntentCategory, route: AgentRoute) -> AgentScene:
+        if route == AgentRoute.GENERAL:
+            return AgentScene.GENERAL_QUERY
+        if intent == IntentCategory.QUERY_STATUS:
+            return AgentScene.PROCUREMENT_STATUS
+        return AgentScene.PROCUREMENT_REQUIREMENT

@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any, Protocol
 
 from app.modules.agent.chat_schemas import ChatHistoryMessage, ChatMessageStatus
-from app.modules.agent.procurement.schemas import ProcurementSessionState
+from app.modules.agent.routes import AgentRoute
 
 try:
     import redis.asyncio as redis_async
@@ -26,8 +26,9 @@ class AgentChatStoreProtocol(Protocol):
     @asynccontextmanager
     async def lock(self, conversation_key: str) -> AsyncIterator[None]: ...
 
-    async def get_state(self, conversation_key: str) -> ProcurementSessionState | None: ...
-    async def save_state(self, conversation_key: str, state: ProcurementSessionState) -> None: ...
+    async def get_route(self, conversation_key: str) -> AgentRoute | None: ...
+    async def save_route(self, conversation_key: str, route: AgentRoute) -> None: ...
+    async def clear_route(self, conversation_key: str) -> None: ...
     async def append_message(self, conversation_key: str, message: ChatHistoryMessage) -> None: ...
     async def set_message_status(
         self, conversation_key: str, message_id: str, status: ChatMessageStatus
@@ -46,7 +47,7 @@ class InMemoryAgentChatStore:
     def __init__(self, *, max_messages: int = 100) -> None:
         self._max_messages = max_messages
         self._messages: dict[str, list[ChatHistoryMessage]] = {}
-        self._states: dict[str, ProcurementSessionState] = {}
+        self._routes: dict[str, AgentRoute] = {}
         self._idempotency: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -56,12 +57,14 @@ class InMemoryAgentChatStore:
         async with lock:
             yield
 
-    async def get_state(self, conversation_key: str) -> ProcurementSessionState | None:
-        state = self._states.get(conversation_key)
-        return state.model_copy(deep=True) if state else None
+    async def get_route(self, conversation_key: str) -> AgentRoute | None:
+        return self._routes.get(conversation_key)
 
-    async def save_state(self, conversation_key: str, state: ProcurementSessionState) -> None:
-        self._states[conversation_key] = state.model_copy(deep=True)
+    async def save_route(self, conversation_key: str, route: AgentRoute) -> None:
+        self._routes[conversation_key] = route
+
+    async def clear_route(self, conversation_key: str) -> None:
+        self._routes.pop(conversation_key, None)
 
     async def append_message(self, conversation_key: str, message: ChatHistoryMessage) -> None:
         messages = self._messages.setdefault(conversation_key, [])
@@ -83,7 +86,10 @@ class InMemoryAgentChatStore:
 
     async def clear(self, conversation_key: str) -> None:
         self._messages.pop(conversation_key, None)
-        self._states.pop(conversation_key, None)
+        self._routes.pop(conversation_key, None)
+        stale_keys = [key for key in self._idempotency if key[0] == conversation_key]
+        for key in stale_keys:
+            self._idempotency.pop(key, None)
 
     async def get_idempotency(
         self, conversation_key: str, key: str
@@ -134,20 +140,24 @@ class RedisAgentChatStore:
             with suppress(Exception):
                 await lock.release()
 
-    async def get_state(self, conversation_key: str) -> ProcurementSessionState | None:
+    async def get_route(self, conversation_key: str) -> AgentRoute | None:
         try:
-            raw = await self._redis.get(self._state_key(conversation_key))
+            raw = await self._redis.get(self._route_key(conversation_key))
         except Exception as exc:
-            raise ChatStoreUnavailable("Redis session state is unavailable") from exc
-        return ProcurementSessionState.model_validate_json(raw) if raw else None
+            raise ChatStoreUnavailable("Redis route state is unavailable") from exc
+        return AgentRoute(raw) if raw else None
 
-    async def save_state(self, conversation_key: str, state: ProcurementSessionState) -> None:
+    async def save_route(self, conversation_key: str, route: AgentRoute) -> None:
         try:
-            await self._redis.setex(
-                self._state_key(conversation_key), self._ttl, state.model_dump_json()
-            )
+            await self._redis.setex(self._route_key(conversation_key), self._ttl, route.value)
         except Exception as exc:
-            raise ChatStoreUnavailable("Redis session state is unavailable") from exc
+            raise ChatStoreUnavailable("Redis route state is unavailable") from exc
+
+    async def clear_route(self, conversation_key: str) -> None:
+        try:
+            await self._redis.delete(self._route_key(conversation_key))
+        except Exception as exc:
+            raise ChatStoreUnavailable("Redis route state is unavailable") from exc
 
     async def append_message(self, conversation_key: str, message: ChatHistoryMessage) -> None:
         key = self._messages_key(conversation_key)
@@ -187,8 +197,13 @@ class RedisAgentChatStore:
 
     async def clear(self, conversation_key: str) -> None:
         try:
+            index_key = self._idempotency_index_key(conversation_key)
+            idempotency_keys = await self._redis.smembers(index_key)
             await self._redis.delete(
-                self._messages_key(conversation_key), self._state_key(conversation_key)
+                self._messages_key(conversation_key),
+                self._route_key(conversation_key),
+                index_key,
+                *idempotency_keys,
             )
         except Exception as exc:
             raise ChatStoreUnavailable("Redis chat session is unavailable") from exc
@@ -214,9 +229,13 @@ class RedisAgentChatStore:
             separators=(",", ":"),
         )
         try:
-            await self._redis.setex(
-                self._idempotency_key(conversation_key, key), self._ttl, payload
-            )
+            record_key = self._idempotency_key(conversation_key, key)
+            index_key = self._idempotency_index_key(conversation_key)
+            pipe = self._redis.pipeline()
+            pipe.setex(record_key, self._ttl, payload)
+            pipe.sadd(index_key, record_key)
+            pipe.expire(index_key, self._ttl)
+            await pipe.execute()
         except Exception as exc:
             raise ChatStoreUnavailable("Redis idempotency store is unavailable") from exc
 
@@ -228,9 +247,13 @@ class RedisAgentChatStore:
         return f"agent:messages:{key}"
 
     @staticmethod
-    def _state_key(key: str) -> str:
-        return f"agent:state:{key}"
+    def _route_key(key: str) -> str:
+        return f"agent:route:{key}"
 
     @staticmethod
     def _idempotency_key(key: str, idempotency_key: str) -> str:
         return f"agent:idempotency:{key}:{idempotency_key}"
+
+    @staticmethod
+    def _idempotency_index_key(key: str) -> str:
+        return f"agent:idempotency-keys:{key}"

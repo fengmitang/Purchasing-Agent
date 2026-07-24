@@ -10,8 +10,7 @@ from app.modules.agent.chat_schemas import (
     ChatMessageStatus,
     ConversationResetResult,
 )
-from app.modules.agent.enums import AgentScene, AgentStage
-from app.modules.agent.intent_recognizer import IntentCategory
+from app.modules.agent.enums import AgentScene, AgentStage, IntentCategory
 
 
 class StubChatService:

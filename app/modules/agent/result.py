@@ -1,8 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.modules.agent.enums import AgentScene, AgentStage
-from app.modules.agent.intent_recognizer import IntentCategory
+from app.modules.agent.enums import AgentScene, AgentStage, IntentCategory
 from app.modules.agent.procurement.schemas import ProcurementSessionState
 
 

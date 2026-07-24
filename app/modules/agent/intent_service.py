@@ -4,7 +4,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.agent.intent_recognizer import IntentCategory
+from app.modules.agent.enums import IntentCategory
 from app.modules.agent.model import AgentModelProtocol
 
 
@@ -16,15 +16,18 @@ class IntentDecision(BaseModel):
     ambiguities: list[str] = Field(default_factory=list)
 
 
-class IntentServiceProtocol(Protocol):
+class ProcurementIntentResolverProtocol(Protocol):
     async def resolve(self, message: str, history: list[dict[str, str]]) -> IntentCategory: ...
 
 
-class ModelIntentService:
+class ModelProcurementIntentResolver:
     def __init__(self, model: AgentModelProtocol) -> None:
         self._model = model
 
     async def resolve(self, message: str, history: list[dict[str, str]]) -> IntentCategory:
+        fallback = _fallback_intent(message)
+        if fallback == IntentCategory.SEARCH_HISTORICAL_SUPPLIERS:
+            return fallback
         response = await self._model.complete(
             system=(
                 "识别员工当前意图，只返回JSON。未知事实为null，歧义写入ambiguities，不得编造。"
@@ -45,7 +48,7 @@ class ModelIntentService:
                 return decision.intent
         except (ValueError, TypeError):
             pass
-        return _fallback_intent(message)
+        return fallback
 
 
 def _json_object(text: str) -> str:
@@ -59,7 +62,7 @@ def _fallback_intent(message: str) -> IntentCategory:
         (IntentCategory.CANCEL_REQUIREMENT, ("取消采购", "取消申请", "撤销申请")),
         (
             IntentCategory.SEARCH_HISTORICAL_SUPPLIERS,
-            ("历史供应商", "供应商推荐", "历史价格", "以前采购"),
+            ("历史供应商", "供应商推荐", "历史采购", "采购记录", "历史价格", "以前采购"),
         ),
         (
             IntentCategory.LIST_REQUIREMENTS,
@@ -69,7 +72,7 @@ def _fallback_intent(message: str) -> IntentCategory:
         (IntentCategory.VIEW_REQUIREMENT, ("查看草稿", "采购草稿", "当前需求")),
         (IntentCategory.MODIFY_REQUIREMENT, ("修改", "改成", "更正", "换成")),
         (IntentCategory.SUPPLEMENT_REQUIREMENT, ("补充", "品牌是", "型号是", "供应商是")),
-        (IntentCategory.CREATE_REQUIREMENT, ("采购", "购买", "申请买", "需要买")),
+        (IntentCategory.CREATE_REQUIREMENT, ("采购", "购买", "买", "申请买", "需要买")),
     )
     for intent, keywords in patterns:
         if any(keyword in message for keyword in keywords):

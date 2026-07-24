@@ -11,13 +11,16 @@ from app.modules.agent.chat_store import (
     InMemoryAgentChatStore,
     RedisAgentChatStore,
 )
-from app.modules.agent.intent_service import ModelIntentService
+from app.modules.agent.intent_service import ModelProcurementIntentResolver
 from app.modules.agent.model import (
     AnthropicToolCallingModel,
     OpenAICompatibleToolCallingModel,
 )
 from app.modules.agent.procurement.service_backend import RequirementServiceBackend
-from app.modules.agent.procurement.session_store import InMemoryProcurementSessionStore
+from app.modules.agent.procurement.session_store import (
+    InMemoryProcurementSessionStore,
+    RedisProcurementSessionStore,
+)
 from app.modules.agent.skill_loader import SkillManager
 from app.modules.requirement.service import RequirementService
 
@@ -52,16 +55,22 @@ def create_agent_runtime(
 
     resources: list[Any] = []
     if settings.agent_redis_url is not None:
+        redis_url = settings.agent_redis_url.get_secret_value()
         try:
             store = RedisAgentChatStore(
-                settings.agent_redis_url.get_secret_value(),
+                redis_url,
+                ttl_seconds=settings.agent_session_ttl_seconds,
+            )
+            procurement_store = RedisProcurementSessionStore(
+                redis_url,
                 ttl_seconds=settings.agent_session_ttl_seconds,
             )
         except ChatStoreUnavailable:
             return None
-        resources.append(store)
+        resources.extend((store, procurement_store))
     else:
         store = InMemoryAgentChatStore()
+        procurement_store = InMemoryProcurementSessionStore()
 
     api_key = settings.agent_api_key.get_secret_value()
     if settings.agent_provider == "anthropic":
@@ -108,13 +117,13 @@ def create_agent_runtime(
     agent_service = build_procurement_agent_service(
         backend,
         model,
-        InMemoryProcurementSessionStore(),
+        procurement_store,
         skill_manager=skill_manager,
     )
     return AgentRuntime(
         chat_service=AgentChatService(
             agent_service=agent_service,
-            intent_service=ModelIntentService(model),
+            procurement_intent_resolver=ModelProcurementIntentResolver(model),
             store=store,
         ),
         resources=tuple(resources),
