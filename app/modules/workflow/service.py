@@ -83,11 +83,10 @@ class WorkflowService:
         self, actor: CurrentUser, *, view: str, page: int, page_size: int
     ) -> tuple[list[ApprovalTaskView], int]:
         self._require_role(actor, "BUILDING_MANAGER", "只有楼长可以查看待审批申请")
-        if not actor.building_ids or actor.employee_id is None:
+        if actor.employee_id is None:
             return [], 0
         async with session_scope(self._session_factory) as session:
             rows, total = await WorkflowRepository(session).list_approval_tasks(
-                building_ids=actor.building_ids,
                 approver_id=actor.employee_id,
                 view=view,
                 page=page,
@@ -105,7 +104,6 @@ class WorkflowService:
             if row is None:
                 raise DomainError(ErrorCode.RESOURCE_NOT_FOUND, "没有找到该待审批申请")
             requirement, building = row
-            self._require_approval_scope(requirement, actor)
             approval = None
             if requirement.status != "PENDING_APPROVAL":
                 if actor.employee_id is None:
@@ -146,9 +144,6 @@ class WorkflowService:
             requirement = await repository.get_requirement_for_update(requirement_id)
             if requirement is None:
                 raise DomainError(ErrorCode.RESOURCE_NOT_FOUND, "没有找到该采购申请")
-            self._require_approval_scope(requirement, context.actor)
-            if requirement.employee_id == employee.id:
-                raise DomainError(ErrorCode.FORBIDDEN, "楼长不能审批本人提交的采购申请")
             if requirement.status != "PENDING_APPROVAL":
                 raise DomainError(ErrorCode.STATE_CONFLICT, "该申请已被其他楼长处理")
             if requirement.version != command.version:
@@ -548,11 +543,6 @@ class WorkflowService:
         return employee
 
     @staticmethod
-    def _require_approval_scope(requirement: PurchaseRequirement, actor: CurrentUser) -> None:
-        if requirement.building_id is None or requirement.building_id not in actor.building_ids:
-            raise DomainError(ErrorCode.FORBIDDEN, "该申请不属于你的楼宇审批范围")
-
-    @staticmethod
     def _require_assigned_purchaser(order: PurchaseOrder, employee: Employee) -> None:
         if order.purchaser_id != employee.id:
             raise DomainError(ErrorCode.FORBIDDEN, "该采购任务已由其他采购员负责")
@@ -560,7 +550,7 @@ class WorkflowService:
     @staticmethod
     def _approval_view(
         requirement: PurchaseRequirement,
-        building: Building,
+        building: Building | None,
         approval: PurchaseApproval | None = None,
     ) -> ApprovalTaskView:
         return ApprovalTaskView(
@@ -569,8 +559,8 @@ class WorkflowService:
             status=requirement.status,
             version=requirement.version,
             revision_no=requirement.revision_no,
-            building_id=building.id,
-            building_name=building.building_name,
+            building_id=building.id if building else None,
+            building_name=building.building_name if building else None,
             applicant=WorkflowApplicant(
                 employee_id=requirement.employee_id,
                 employee_no=requirement.applicant_employee_no,

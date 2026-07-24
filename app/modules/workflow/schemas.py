@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class BuildingOption(BaseModel):
-    """员工创建采购申请时可选择的有效楼宇。"""
+    """兼容接口返回的有效楼宇主数据。"""
 
     building_id: int
     building_code: str
@@ -30,8 +30,8 @@ class ApprovalTaskView(BaseModel):
     status: str
     version: int
     revision_no: int
-    building_id: int
-    building_name: str
+    building_id: int | None
+    building_name: str | None
     applicant: WorkflowApplicant
     category_name: str | None
     application_reason: str | None

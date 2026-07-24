@@ -163,21 +163,6 @@ async def seed_auth() -> dict[str, int]:
                     {"employee_id": employee["id"], "building_id": building_id, "now": now},
                 )
                 counts["scopes"] += max(result.rowcount, 0)
-            for index, employee in enumerate(employees):
-                if not buildings:
-                    break
-                if employee["role"] == "APPROVER":
-                    continue
-                building_id = buildings[index % len(buildings)]
-                result = await session.execute(
-                    text(
-                        "INSERT IGNORE INTO employee_building_role "
-                        "(employee_id, building_id, role_code, valid_from) "
-                        "VALUES (:employee_id, :building_id, 'EMPLOYEE', :now)"
-                    ),
-                    {"employee_id": employee["id"], "building_id": building_id, "now": now},
-                )
-                counts["scopes"] += max(result.rowcount, 0)
             for index, building_id in enumerate(buildings):
                 result = await session.execute(
                     text(

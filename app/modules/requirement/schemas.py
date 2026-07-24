@@ -50,7 +50,7 @@ class RequirementDraftFields(BaseModel):
     session_id: str | None = Field(default=None, max_length=100, description="来源 Agent 会话编号")
     building_id: PositiveId | None = Field(
         default=None,
-        description="兼容字段；系统根据当前登录账号自动写入所属楼宇，忽略客户端传值",
+        description="兼容的可选字段；新建申请暂不填写，客户端传值会被忽略",
     )
     category_id: PositiveId | None = Field(
         default=None, description="已匹配到的产品分类数据库 ID；不知道时留空"

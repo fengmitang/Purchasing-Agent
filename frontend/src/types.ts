@@ -51,7 +51,7 @@ export interface RecommendationResult {
 export interface BuildingOption { building_id: number; building_code: string; building_name: string; }
 export interface ApprovalTask {
   requirement_id: number; requirement_no: string; status: string; version: number; revision_no: number;
-  building_id: number; building_name: string; applicant: { employee_id: number | null; employee_no: string | null; name: string; phone: string | null };
+  building_id: number | null; building_name: string | null; applicant: { employee_id: number | null; employee_no: string | null; name: string; phone: string | null };
   category_name: string | null; application_reason: string | null; application_location: string | null;
   device_type: string | null; product_name: string | null; product_full_name: string | null;
   brand: string | null; model: string | null; specification: string | null; quantity: string | null;
